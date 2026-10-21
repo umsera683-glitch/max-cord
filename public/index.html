@@ -1,0 +1,253 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="mobile-web-app-capable" content="yes">
+  <title>StreamHub</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script src="/socket.io/socket.io.js"></script>
+  <link rel="stylesheet" href="/style.css">
+</head>
+<body class="bg-gray-950 text-white">
+
+  <!-- ===================== LOBBY ===================== -->
+  <div id="lobby-view" class="lobby-view flex flex-col items-center justify-start p-4 overflow-y-auto">
+
+    <div class="w-full max-w-2xl mt-6 mb-8 text-center">
+      <h1 class="text-5xl font-bold bg-gradient-to-r from-purple-500 to-blue-500 bg-clip-text text-transparent">StreamHub</h1>
+      <p class="text-gray-400 mt-2 text-sm">Transmissão de tela e áudio/vídeo em tempo real</p>
+    </div>
+
+    <!-- Perfil / Apelido -->
+    <div class="w-full max-w-2xl mb-5">
+      <div class="bg-gray-900 border border-gray-800 rounded-2xl p-5">
+        <h2 class="text-base font-semibold mb-3 text-gray-300 flex items-center gap-2">
+          <span class="text-purple-400">👤</span> Seu Perfil
+        </h2>
+        <div class="flex gap-3 items-center">
+          <div id="avatar-preview" class="avatar-bubble flex-shrink-0">?</div>
+          <input type="text" id="global-username" placeholder="Digite seu apelido (obrigatório)" maxlength="20"
+            class="flex-1 bg-gray-800 border border-gray-700 rounded-lg px-4 py-2.5 text-white placeholder-gray-500 focus:outline-none focus:border-purple-500 transition-colors text-base"
+            autocomplete="nickname">
+        </div>
+        <p class="text-xs text-gray-500 mt-2 ml-1">O apelido é usado para te identificar em todas as salas.</p>
+      </div>
+    </div>
+
+    <!-- Ações principais -->
+    <div class="grid md:grid-cols-2 gap-4 w-full max-w-2xl mb-5">
+
+      <!-- Criar Sala -->
+      <div class="bg-gray-900 border border-gray-800 rounded-2xl p-5">
+        <h2 class="text-base font-semibold mb-4 flex items-center gap-2">
+          <span class="text-purple-400">＋</span> Criar Sala
+        </h2>
+        <div class="space-y-3">
+          <input type="text" id="create-room-name" placeholder="Nome da sala" maxlength="30"
+            class="w-full bg-gray-800 border border-gray-700 rounded-lg px-4 py-2.5 text-white placeholder-gray-500 focus:outline-none focus:border-purple-500 transition-colors text-base">
+          <div class="flex gap-2">
+            <input type="text" id="create-room-id" placeholder="ID (ou gerar)" maxlength="10"
+              class="flex-1 min-w-0 bg-gray-800 border border-gray-700 rounded-lg px-4 py-2.5 text-white placeholder-gray-500 focus:outline-none focus:border-purple-500 uppercase transition-colors text-base">
+            <button id="generate-room-id" class="bg-gray-700 hover:bg-gray-600 active:bg-gray-600 rounded-lg px-4 py-2.5 text-sm font-medium transition-colors whitespace-nowrap flex-shrink-0">
+              Gerar
+            </button>
+          </div>
+          <input type="password" id="create-password" placeholder="Senha (opcional)"
+            class="w-full bg-gray-800 border border-gray-700 rounded-lg px-4 py-2.5 text-white placeholder-gray-500 focus:outline-none focus:border-purple-500 transition-colors text-base">
+          <button id="btn-create-room" class="w-full bg-gradient-to-r from-purple-600 to-blue-600 hover:from-purple-500 hover:to-blue-500 active:scale-95 rounded-lg py-3 font-semibold transition-all">
+            Criar Sala
+          </button>
+        </div>
+      </div>
+
+      <!-- Entrar em Sala -->
+      <div class="bg-gray-900 border border-gray-800 rounded-2xl p-5">
+        <h2 class="text-base font-semibold mb-4 flex items-center gap-2">
+          <span class="text-blue-400">→</span> Entrar em Sala
+        </h2>
+        <div class="space-y-3">
+          <input type="text" id="join-room-id" placeholder="ID da sala" maxlength="10"
+            class="w-full bg-gray-800 border border-gray-700 rounded-lg px-4 py-2.5 text-white placeholder-gray-500 focus:outline-none focus:border-blue-500 uppercase transition-colors text-base">
+          <input type="password" id="join-password" placeholder="Senha (se houver)"
+            class="w-full bg-gray-800 border border-gray-700 rounded-lg px-4 py-2.5 text-white placeholder-gray-500 focus:outline-none focus:border-blue-500 transition-colors text-base">
+          <div class="flex justify-end">
+            <button id="btn-forgot-password" type="button"
+              class="text-xs text-gray-500 hover:text-purple-400 transition-colors mt-0.5 hidden">
+              Esqueci a senha
+            </button>
+          </div>
+          <button id="btn-join-room" class="w-full bg-gradient-to-r from-blue-600 to-purple-600 hover:from-blue-500 hover:to-purple-500 active:scale-95 rounded-lg py-3 font-semibold transition-all">
+            Entrar na Sala
+          </button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Salas disponíveis -->
+    <div class="w-full max-w-2xl mb-8">
+      <div class="bg-gray-900 border border-gray-800 rounded-2xl p-5">
+        <div class="flex items-center justify-between mb-4">
+          <h2 class="text-base font-semibold flex items-center gap-2">
+            <span class="text-green-400">🌐</span> Salas Disponíveis
+          </h2>
+          <button id="btn-refresh-rooms" class="text-xs text-gray-400 hover:text-white bg-gray-800 hover:bg-gray-700 px-3 py-1.5 rounded-lg transition-colors">
+            Atualizar
+          </button>
+        </div>
+        <div id="rooms-list" class="space-y-2 min-h-[60px] flex flex-col justify-center">
+          <p class="text-gray-500 text-sm text-center">Nenhuma sala disponível no momento.</p>
+        </div>
+      </div>
+    </div>
+
+    <p class="text-gray-600 text-xs mb-6">Powered by WebRTC + Socket.io</p>
+  </div>
+
+  <!-- ===================== ROOM VIEW ===================== -->
+  <div id="room-view" class="room-view hidden">
+
+    <!-- Header -->
+    <header class="room-header flex items-center justify-between px-3 py-2 bg-gray-900 border-b border-gray-800">
+      <div class="flex items-center gap-3 min-w-0">
+        <span class="text-lg font-bold bg-gradient-to-r from-purple-500 to-blue-500 bg-clip-text text-transparent whitespace-nowrap hidden sm:block">StreamHub</span>
+        <div class="flex items-center gap-1.5 min-w-0">
+          <span class="text-gray-500 text-sm">#</span>
+          <span id="room-name-display" class="font-semibold text-white text-sm truncate max-w-[120px] sm:max-w-none"></span>
+          <span id="room-id-badge" class="font-mono text-xs text-purple-400 bg-purple-900/30 px-2 py-0.5 rounded hidden sm:inline"></span>
+        </div>
+      </div>
+      <div class="flex items-center gap-2 flex-shrink-0">
+        <div class="flex items-center gap-1.5 text-xs bg-gray-800 px-2.5 py-1.5 rounded-lg">
+          <span class="w-2 h-2 rounded-full bg-green-500 animate-pulse inline-block"></span>
+          <span id="participant-count" class="text-gray-300">1</span>
+        </div>
+        <div id="lock-badge" class="hidden text-xs bg-yellow-900/40 text-yellow-400 px-2.5 py-1.5 rounded-lg">🔒</div>
+        <!-- Botão deletar sala (só para o dono) -->
+        <button id="btn-delete-room" class="hidden items-center gap-1.5 text-xs bg-red-900/50 hover:bg-red-800/70 text-red-400 border border-red-800 px-2.5 py-1.5 rounded-lg transition-colors">
+          🗑 Deletar
+        </button>
+        <!-- Toggle painel de participantes -->
+        <button id="btn-toggle-participants" class="text-xs bg-gray-800 hover:bg-gray-700 px-2.5 py-1.5 rounded-lg transition-colors" title="Participantes">
+          👥
+        </button>
+      </div>
+    </header>
+
+    <!-- Corpo: vídeos + sidebar -->
+    <div class="room-body">
+
+      <!-- Área de vídeo principal -->
+      <main id="video-container" class="video-container">
+        <div id="streams-grid" class="streams-grid">
+          <!-- Vídeos são injetados aqui pelo JS -->
+          <div id="no-stream" class="no-stream-placeholder">
+            <div class="text-5xl mb-3">📺</div>
+            <p class="text-base font-medium text-gray-400">Nenhuma transmissão ativa</p>
+            <p class="text-xs text-gray-600 mt-1">Compartilhe sua tela ou ligue a câmera para iniciar</p>
+          </div>
+        </div>
+      </main>
+
+      <!-- Sidebar de participantes -->
+      <aside id="participants-panel" class="participants-panel hidden">
+        <div class="p-3 border-b border-gray-800">
+          <h3 class="text-sm font-semibold text-gray-300">Participantes</h3>
+        </div>
+        <div id="participants-list" class="overflow-y-auto flex-1 p-2 space-y-1">
+          <!-- preenchido por JS -->
+        </div>
+      </aside>
+    </div>
+
+    <!-- Toolbar -->
+    <footer class="room-toolbar">
+      <div class="flex items-center justify-center gap-1.5 sm:gap-2 flex-wrap">
+
+        <!-- Compartilhar tela (desktop) -->
+        <button id="btn-share-screen" class="toolbar-btn" data-active-class="active-screen" title="Compartilhar tela">
+          <span class="btn-icon">🖥️</span>
+          <span class="btn-label">Tela</span>
+        </button>
+
+        <!-- Câmera -->
+        <button id="btn-camera" class="toolbar-btn" data-active-class="active-camera" title="Câmera">
+          <span class="btn-icon">📹</span>
+          <span class="btn-label">Câmera</span>
+        </button>
+
+        <!-- Microfone -->
+        <button id="btn-mic" class="toolbar-btn" data-active-class="active-mic" title="Microfone">
+          <span class="btn-icon">🎙️</span>
+          <span class="btn-label">Mic</span>
+        </button>
+
+        <!-- Áudio da transmissão (volume local) -->
+        <button id="btn-audio" class="toolbar-btn active-audio" title="Áudio dos outros">
+          <span class="btn-icon">🔊</span>
+          <span class="btn-label">Áudio</span>
+        </button>
+
+        <div class="w-px h-8 bg-gray-700 hidden sm:block mx-1"></div>
+
+        <!-- Sair -->
+        <button id="btn-leave" class="toolbar-btn leave-btn" title="Sair da sala">
+          <span class="btn-icon">🚪</span>
+          <span class="btn-label">Sair</span>
+        </button>
+      </div>
+    </footer>
+  </div>
+
+  <!-- Toast Container -->
+  <div id="toast-container" class="fixed top-3 right-3 z-[200] flex flex-col gap-2 pointer-events-none" style="max-width:320px"></div>
+
+  <!-- ===================== MODAL: ESQUECI A SENHA ===================== -->
+  <div id="modal-forgot" class="modal-overlay hidden" role="dialog" aria-modal="true">
+    <div class="modal-box">
+      <h2 class="text-lg font-bold mb-1">Esqueceu a senha?</h2>
+      <p class="text-sm text-gray-400 mb-4">
+        Prove que você é o criador da sala digitando seu <strong>apelido exato</strong> usado ao criá-la.
+        Se bater, você pode definir uma nova senha.
+      </p>
+
+      <div class="space-y-3">
+        <div>
+          <label class="block text-xs font-medium text-gray-400 mb-1">ID da Sala</label>
+          <input type="text" id="forgot-room-id" readonly
+            class="w-full bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-gray-300 text-sm cursor-not-allowed">
+        </div>
+        <div>
+          <label class="block text-xs font-medium text-gray-400 mb-1">Seu apelido (como o dono criou a sala)</label>
+          <input type="text" id="forgot-owner-name" placeholder="Ex: João" maxlength="20"
+            class="w-full bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-white placeholder-gray-500 focus:outline-none focus:border-purple-500 text-sm transition-colors">
+        </div>
+        <div>
+          <label class="block text-xs font-medium text-gray-400 mb-1">Nova senha (deixe vazio para remover)</label>
+          <input type="password" id="forgot-new-password" placeholder="Nova senha ou vazio para sem senha"
+            class="w-full bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-white placeholder-gray-500 focus:outline-none focus:border-purple-500 text-sm transition-colors">
+        </div>
+        <div>
+          <label class="block text-xs font-medium text-gray-400 mb-1">Confirmar nova senha</label>
+          <input type="password" id="forgot-confirm-password" placeholder="Repita a nova senha"
+            class="w-full bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-white placeholder-gray-500 focus:outline-none focus:border-purple-500 text-sm transition-colors">
+        </div>
+      </div>
+
+      <div id="forgot-error" class="hidden mt-3 text-xs text-red-400 bg-red-900/30 border border-red-800 rounded-lg px-3 py-2"></div>
+
+      <div class="flex gap-2 mt-5">
+        <button id="btn-forgot-cancel" class="flex-1 bg-gray-800 hover:bg-gray-700 border border-gray-700 rounded-lg py-2.5 text-sm font-medium transition-colors">
+          Cancelar
+        </button>
+        <button id="btn-forgot-confirm" class="flex-1 bg-gradient-to-r from-purple-600 to-blue-600 hover:from-purple-500 hover:to-blue-500 rounded-lg py-2.5 text-sm font-semibold transition-all">
+          Redefinir Senha
+        </button>
+      </div>
+    </div>
+  </div>
+
+  <script src="/app.js"></script>
+</body>
+</html>

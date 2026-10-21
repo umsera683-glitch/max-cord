@@ -1,0 +1,634 @@
+/* ===================== RESET & BASE ===================== */
+
+*, *::before, *::after {
+  box-sizing: border-box;
+  -webkit-tap-highlight-color: transparent;
+}
+
+html, body {
+  margin: 0;
+  padding: 0;
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif;
+  background: #030712;
+  color: #f9fafb;
+  overscroll-behavior: none;
+  overflow: hidden;
+  height: 100%;
+  width: 100%;
+}
+
+input, button {
+  font-family: inherit;
+  touch-action: manipulation;
+}
+
+/* Previne zoom automático em inputs no iOS */
+input[type="text"],
+input[type="password"] {
+  font-size: 16px;
+}
+
+@media (min-width: 640px) {
+  input[type="text"],
+  input[type="password"] {
+    font-size: 14px;
+  }
+}
+
+/* ===================== SCROLLBAR ===================== */
+
+::-webkit-scrollbar { width: 5px; height: 5px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: #374151; border-radius: 3px; }
+::-webkit-scrollbar-thumb:hover { background: #4b5563; }
+
+/* ===================== LOBBY ===================== */
+
+.lobby-view {
+  min-height: 100vh;
+  min-height: 100dvh;
+  padding-top: max(1rem, env(safe-area-inset-top));
+  padding-bottom: max(1rem, env(safe-area-inset-bottom));
+  overflow-y: auto;
+  -webkit-overflow-scrolling: touch;
+}
+
+/* ===================== AVATAR ===================== */
+
+.avatar-bubble {
+  width: 44px;
+  height: 44px;
+  border-radius: 50%;
+  background: linear-gradient(135deg, #7c3aed, #2563eb);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 18px;
+  font-weight: 700;
+  color: #fff;
+  user-select: none;
+  flex-shrink: 0;
+}
+
+.avatar-bubble.sm {
+  width: 32px;
+  height: 32px;
+  font-size: 13px;
+}
+
+/* ===================== ROOM VIEW ===================== */
+
+.room-view {
+  height: 100vh;
+  height: 100dvh;
+  width: 100vw;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.room-header {
+  height: 48px;
+  flex-shrink: 0;
+  padding-top: max(0.5rem, env(safe-area-inset-top));
+}
+
+/* Corpo: vídeos + sidebar */
+.room-body {
+  flex: 1;
+  display: flex;
+  overflow: hidden;
+  min-height: 0;
+}
+
+/* Container principal de vídeo */
+.video-container {
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+  position: relative;
+  background: #000;
+}
+
+/* ===================== STREAMS GRID (Discord-style) ===================== */
+
+.streams-grid {
+  width: 100%;
+  height: 100%;
+  display: grid;
+  gap: 4px;
+  padding: 4px;
+  background: #000;
+  /* Layout padrão: 1 stream */
+  grid-template-columns: 1fr;
+  grid-template-rows: 1fr;
+}
+
+/* 2 streams */
+.streams-grid.count-2 {
+  grid-template-columns: 1fr 1fr;
+  grid-template-rows: 1fr;
+}
+
+/* 3 streams */
+.streams-grid.count-3 {
+  grid-template-columns: 1fr 1fr;
+  grid-template-rows: 1fr 1fr;
+}
+.streams-grid.count-3 .stream-tile:first-child {
+  grid-column: 1 / -1;
+}
+
+/* 4 streams */
+.streams-grid.count-4 {
+  grid-template-columns: 1fr 1fr;
+  grid-template-rows: 1fr 1fr;
+}
+
+/* 5-6 streams */
+.streams-grid.count-5,
+.streams-grid.count-6 {
+  grid-template-columns: 1fr 1fr 1fr;
+  grid-template-rows: 1fr 1fr;
+}
+
+/* 7-9 streams */
+.streams-grid.count-7,
+.streams-grid.count-8,
+.streams-grid.count-9 {
+  grid-template-columns: 1fr 1fr 1fr;
+  grid-template-rows: 1fr 1fr 1fr;
+}
+
+/* 10+ streams: scroll */
+.streams-grid.count-many {
+  grid-template-columns: repeat(4, 1fr);
+  grid-auto-rows: minmax(140px, 1fr);
+  overflow-y: auto;
+  align-content: start;
+}
+
+/* ===================== STREAM TILE ===================== */
+
+.stream-tile {
+  position: relative;
+  background: #0f0f1a;
+  border-radius: 8px;
+  overflow: hidden;
+  border: 2px solid transparent;
+  cursor: pointer;
+  transition: border-color 0.2s;
+  min-height: 0;
+}
+
+.stream-tile:hover {
+  border-color: #6366f1;
+}
+
+.stream-tile video {
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  display: block;
+  background: #000;
+}
+
+/* Tile de câmera: object-fit cover (rosto) */
+.stream-tile.type-camera video {
+  object-fit: cover;
+}
+
+/* Label com nome embaixo */
+.stream-tile-label {
+  position: absolute;
+  bottom: 0;
+  left: 0;
+  right: 0;
+  padding: 20px 8px 6px;
+  background: linear-gradient(transparent, rgba(0,0,0,0.75));
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  pointer-events: none;
+}
+
+.stream-tile-label .tile-avatar {
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  background: linear-gradient(135deg, #7c3aed, #2563eb);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 10px;
+  font-weight: 700;
+  color: #fff;
+  flex-shrink: 0;
+}
+
+.stream-tile-label .tile-name {
+  font-size: 12px;
+  font-weight: 500;
+  color: #fff;
+  text-shadow: 0 1px 3px rgba(0,0,0,0.8);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.stream-tile-label .tile-type-badge {
+  margin-left: auto;
+  font-size: 11px;
+  opacity: 0.8;
+  flex-shrink: 0;
+}
+
+/* Ícone de fullscreen ao hover */
+.stream-tile::after {
+  content: '⛶';
+  position: absolute;
+  top: 6px;
+  right: 6px;
+  background: rgba(0,0,0,0.55);
+  color: #fff;
+  width: 26px;
+  height: 26px;
+  border-radius: 6px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 13px;
+  opacity: 0;
+  transition: opacity 0.15s;
+  pointer-events: none;
+}
+
+.stream-tile:hover::after {
+  opacity: 1;
+}
+
+/* Tile do microfone sem vídeo (só áudio) */
+.stream-tile.audio-only {
+  background: #0f0f1a;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.stream-tile.audio-only .mic-avatar {
+  width: 64px;
+  height: 64px;
+  border-radius: 50%;
+  background: linear-gradient(135deg, #7c3aed, #2563eb);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 26px;
+}
+
+.stream-tile.audio-only .mic-name {
+  font-size: 13px;
+  font-weight: 500;
+  color: #d1d5db;
+}
+
+/* No stream placeholder */
+.no-stream-placeholder {
+  width: 100%;
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  user-select: none;
+  -webkit-user-select: none;
+  gap: 4px;
+}
+
+/* ===================== SIDEBAR PARTICIPANTES ===================== */
+
+.participants-panel {
+  width: 220px;
+  flex-shrink: 0;
+  background: #111827;
+  border-left: 1px solid #1f2937;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.participant-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 8px;
+  border-radius: 8px;
+  transition: background 0.15s;
+}
+
+.participant-item:hover {
+  background: #1f2937;
+}
+
+.participant-item .p-name {
+  font-size: 13px;
+  font-weight: 500;
+  color: #d1d5db;
+  flex: 1;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.participant-item .p-badges {
+  display: flex;
+  align-items: center;
+  gap: 3px;
+  flex-shrink: 0;
+}
+
+.p-badge {
+  font-size: 11px;
+  opacity: 0.8;
+}
+
+@media (max-width: 640px) {
+  .participants-panel {
+    position: absolute;
+    top: 0;
+    right: 0;
+    bottom: 0;
+    width: 200px;
+    z-index: 50;
+    box-shadow: -4px 0 16px rgba(0,0,0,0.5);
+  }
+}
+
+/* ===================== TOOLBAR ===================== */
+
+.room-toolbar {
+  flex-shrink: 0;
+  background: #111827;
+  border-top: 1px solid #1f2937;
+  padding: 10px 8px;
+  padding-bottom: max(10px, env(safe-area-inset-bottom));
+}
+
+.toolbar-btn {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 3px;
+  background: #1f2937;
+  border: 1px solid #374151;
+  border-radius: 12px;
+  padding: 8px 12px;
+  cursor: pointer;
+  transition: all 0.15s;
+  color: #d1d5db;
+  min-width: 56px;
+}
+
+.toolbar-btn:hover {
+  background: #374151;
+}
+
+.toolbar-btn:active {
+  transform: scale(0.94);
+}
+
+.toolbar-btn .btn-icon {
+  font-size: 18px;
+  line-height: 1;
+}
+
+.toolbar-btn .btn-label {
+  font-size: 10px;
+  font-weight: 500;
+  white-space: nowrap;
+}
+
+/* Estados ativos */
+.toolbar-btn.active-screen {
+  background: rgba(139, 92, 246, 0.25) !important;
+  border-color: #8b5cf6 !important;
+  color: #c4b5fd !important;
+}
+
+.toolbar-btn.active-camera {
+  background: rgba(34, 197, 94, 0.2) !important;
+  border-color: #22c55e !important;
+  color: #86efac !important;
+}
+
+.toolbar-btn.active-mic {
+  background: rgba(34, 197, 94, 0.2) !important;
+  border-color: #22c55e !important;
+  color: #86efac !important;
+}
+
+.toolbar-btn.muted-mic {
+  background: rgba(239, 68, 68, 0.2) !important;
+  border-color: #ef4444 !important;
+  color: #fca5a5 !important;
+}
+
+.toolbar-btn.active-audio {
+  background: rgba(59, 130, 246, 0.2) !important;
+  border-color: #3b82f6 !important;
+  color: #93c5fd !important;
+}
+
+.toolbar-btn.muted-audio {
+  background: rgba(107, 114, 128, 0.2) !important;
+  border-color: #6b7280 !important;
+  color: #9ca3af !important;
+}
+
+.leave-btn {
+  background: rgba(220, 38, 38, 0.2) !important;
+  border-color: #b91c1c !important;
+  color: #fca5a5 !important;
+}
+
+.leave-btn:hover {
+  background: rgba(220, 38, 38, 0.4) !important;
+}
+
+/* ===================== TOAST ===================== */
+
+@keyframes slideIn {
+  from { transform: translateX(110%); opacity: 0; }
+  to { transform: translateX(0); opacity: 1; }
+}
+@keyframes fadeOut {
+  from { opacity: 1; }
+  to { opacity: 0; transform: translateX(110%); }
+}
+
+.toast {
+  padding: 10px 14px;
+  border-radius: 10px;
+  font-size: 13px;
+  font-weight: 500;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  box-shadow: 0 4px 16px rgba(0,0,0,0.4);
+  animation: slideIn 0.28s ease-out forwards;
+  pointer-events: auto;
+  max-width: 100%;
+  word-break: break-word;
+}
+
+.toast.success { background: #166534; border: 1px solid #16a34a; color: #bbf7d0; }
+.toast.error   { background: #7f1d1d; border: 1px solid #dc2626; color: #fecaca; }
+.toast.info    { background: #1e3a5f; border: 1px solid #3b82f6; color: #bfdbfe; }
+.toast.fade-out { animation: fadeOut 0.28s ease-out forwards; }
+
+/* ===================== SALA LIST ITEM ===================== */
+
+.room-list-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 10px 12px;
+  background: #111827;
+  border: 1px solid #1f2937;
+  border-radius: 10px;
+  cursor: pointer;
+  transition: border-color 0.15s, background 0.15s;
+}
+
+.room-list-item:hover {
+  border-color: #6366f1;
+  background: #1c2333;
+}
+
+.room-list-item .room-info { flex: 1; min-width: 0; }
+.room-list-item .room-title { font-size: 14px; font-weight: 600; color: #f9fafb; truncate; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.room-list-item .room-meta { font-size: 11px; color: #6b7280; margin-top: 1px; }
+.room-list-item .room-join-btn {
+  font-size: 12px;
+  font-weight: 600;
+  color: #818cf8;
+  background: rgba(99,102,241,0.15);
+  border: 1px solid rgba(99,102,241,0.3);
+  border-radius: 6px;
+  padding: 4px 10px;
+  flex-shrink: 0;
+  transition: background 0.15s;
+}
+.room-list-item:hover .room-join-btn {
+  background: rgba(99,102,241,0.3);
+}
+
+/* ===================== FULLSCREEN ===================== */
+
+:fullscreen .stream-tile {
+  border-radius: 0;
+  border: none;
+}
+
+:-webkit-full-screen .stream-tile {
+  border-radius: 0;
+  border: none;
+}
+
+/* ===================== MOBILE AJUSTES ===================== */
+
+@media (max-width: 640px) {
+  .streams-grid.count-2 {
+    grid-template-columns: 1fr;
+    grid-template-rows: 1fr 1fr;
+  }
+
+  .streams-grid.count-3,
+  .streams-grid.count-4 {
+    grid-template-columns: 1fr 1fr;
+  }
+
+  .streams-grid.count-3 .stream-tile:first-child {
+    grid-column: 1 / -1;
+  }
+
+  .streams-grid.count-5,
+  .streams-grid.count-6,
+  .streams-grid.count-7,
+  .streams-grid.count-8,
+  .streams-grid.count-9 {
+    grid-template-columns: 1fr 1fr;
+    grid-auto-rows: minmax(100px, 1fr);
+  }
+
+  .toolbar-btn {
+    min-width: 48px;
+    padding: 7px 10px;
+  }
+
+  .toolbar-btn .btn-icon {
+    font-size: 16px;
+  }
+
+  .toolbar-btn .btn-label {
+    font-size: 9px;
+  }
+}
+
+/* ===================== LANDSCAPE MOBILE ===================== */
+
+@media (max-height: 500px) and (orientation: landscape) {
+  .room-toolbar {
+    padding: 6px 8px;
+  }
+
+  .toolbar-btn {
+    flex-direction: row;
+    gap: 5px;
+    padding: 6px 10px;
+    min-width: auto;
+  }
+
+  .toolbar-btn .btn-label {
+    font-size: 11px;
+  }
+}
+
+/* ===================== MODAL ===================== */
+
+.modal-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.75);
+  backdrop-filter: blur(4px);
+  -webkit-backdrop-filter: blur(4px);
+  z-index: 300;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 1rem;
+}
+
+.modal-overlay.hidden {
+  display: none;
+}
+
+.modal-box {
+  background: #111827;
+  border: 1px solid #1f2937;
+  border-radius: 1.25rem;
+  padding: 1.5rem;
+  width: 100%;
+  max-width: 420px;
+  box-shadow: 0 20px 60px rgba(0, 0, 0, 0.6);
+  animation: modalIn 0.2s ease-out;
+}
+
+@keyframes modalIn {
+  from { opacity: 0; transform: scale(0.95) translateY(8px); }
+  to   { opacity: 1; transform: scale(1)    translateY(0);   }
+}
