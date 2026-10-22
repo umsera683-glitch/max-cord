@@ -101,7 +101,10 @@ function connectSocket() {
   return new Promise(resolve => {
     if (socket && socket.connected) return resolve(true);
 
-    socket = io({ transports: ['websocket', 'polling'], reconnectionAttempts: 5 });
+    socket = io(window.SOCKET_URL || location.origin, {
+      transports: ['websocket', 'polling'],
+      reconnectionAttempts: 5
+    });
 
     socket.on('connect', () => { myId = socket.id; setupSocketListeners(); resolve(true); });
     socket.on('connect_error', err => {
@@ -351,6 +354,7 @@ function closePeer(peerId) {
 // ==================== TRACKS REMOTOS ====================
 
 // FIX 5: cria stream local se event.streams[0] for undefined
+// FIX ÁUDIO: quem transmite não ouve o próprio áudio de volta
 function handleRemoteTrack(peerId, event) {
   const stream = event.streams[0] || (() => {
     const s = new MediaStream();
@@ -364,18 +368,21 @@ function handleRemoteTrack(peerId, event) {
   const hasVideo = stream.getVideoTracks().length > 0;
   const hasAudio = stream.getAudioTracks().length > 0;
 
+  // Se este stream veio do próprio usuário (eco), ignorar áudio
+  const isOwnEcho = (peerId === myId);
+
   if (hasVideo) {
     upsertVideoTile(peerId, stream);
-  } else if (hasAudio) {
+  } else if (hasAudio && !isOwnEcho) {
     const p = participants.get(peerId);
     upsertAudioTile(peerId, stream, p ? p.name : 'Remoto');
   }
 
-  // Aplicar mute global
-  stream.getTracks().forEach(() => {
-    document.querySelectorAll('#streams-grid video, #streams-grid audio').forEach(el => {
-      if (el.srcObject === stream) el.muted = isAudioMuted;
-    });
+  // Mutar: eco próprio SEMPRE mudo; outros obedecem isAudioMuted
+  document.querySelectorAll('#streams-grid video, #streams-grid audio').forEach(el => {
+    if (el.srcObject === stream) {
+      el.muted = isOwnEcho ? true : isAudioMuted;
+    }
   });
 }
 
@@ -396,8 +403,8 @@ function upsertVideoTile(peerId, stream) {
     video.autoplay = true;
     video.playsInline = true;
     video.setAttribute('playsinline', '');
-    // Não mutar vídeos remotos — áudio deve ser ouvido
-    video.muted = (peerId === myId);
+    // Mutar sempre: próprio usuário (evita eco) ou conforme estado global
+    video.muted = (peerId === myId) ? true : isAudioMuted;
     video.srcObject = stream;
     tile.appendChild(video);
 
@@ -1198,6 +1205,33 @@ document.getElementById('btn-toggle-participants').addEventListener('click', () 
 let lastTap = 0;
 document.addEventListener('touchend', e => { const now = Date.now(); if (now - lastTap < 300) e.preventDefault(); lastTap = now; }, { passive: false });
 document.addEventListener('contextmenu', e => { if (e.target.tagName === 'VIDEO') e.preventDefault(); });
+
+// ==================== SAIR AO FECHAR / RECARREGAR ====================
+
+// beforeunload: dispara ao fechar aba, fechar navegador ou recarregar
+window.addEventListener('beforeunload', () => {
+  if (currentRoomId && socket) {
+    stopAllMedia();
+    socket.emit('leave-room');
+  }
+});
+
+// pagehide: fallback para mobile (iOS Safari não dispara beforeunload confiável)
+window.addEventListener('pagehide', () => {
+  if (currentRoomId && socket) {
+    stopAllMedia();
+    socket.emit('leave-room');
+  }
+});
+
+// visibilitychange: detecta quando app vai para background no mobile
+document.addEventListener('visibilitychange', () => {
+  if (document.visibilityState === 'hidden' && currentRoomId && socket) {
+    // No mobile, quando o usuário sai do app a página fica "hidden"
+    // Apenas emite leave sem parar a mídia (pode ter voltado)
+    socket.emit('leave-room');
+  }
+});
 
 // ==================== INIT ====================
 

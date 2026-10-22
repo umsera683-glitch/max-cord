@@ -5,9 +5,10 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="mobile-web-app-capable" content="yes">
-  <title>StreamHub</title>
+  <title>MaxCord</title>
   <script src="https://cdn.tailwindcss.com"></script>
-  <script src="/socket.io/socket.io.js"></script>
+  <script>window.SOCKET_URL = 'https://max-cord.onrender.com';</script>
+  <script src="https://max-cord.onrender.com/socket.io/socket.io.js"></script>
   <link rel="stylesheet" href="/style.css">
 </head>
 <body class="bg-gray-950 text-white">
@@ -16,7 +17,7 @@
   <div id="lobby-view" class="lobby-view flex flex-col items-center justify-start p-4 overflow-y-auto">
 
     <div class="w-full max-w-2xl mt-6 mb-8 text-center">
-      <h1 class="text-5xl font-bold bg-gradient-to-r from-purple-500 to-blue-500 bg-clip-text text-transparent">StreamHub</h1>
+      <h1 class="text-5xl font-bold bg-gradient-to-r from-purple-500 to-blue-500 bg-clip-text text-transparent">MaxCord</h1>
       <p class="text-gray-400 mt-2 text-sm">Transmissão de tela e áudio/vídeo em tempo real</p>
     </div>
 
@@ -111,7 +112,7 @@
     <!-- Header -->
     <header class="room-header flex items-center justify-between px-3 py-2 bg-gray-900 border-b border-gray-800">
       <div class="flex items-center gap-3 min-w-0">
-        <span class="text-lg font-bold bg-gradient-to-r from-purple-500 to-blue-500 bg-clip-text text-transparent whitespace-nowrap hidden sm:block">StreamHub</span>
+        <span class="text-lg font-bold bg-gradient-to-r from-purple-500 to-blue-500 bg-clip-text text-transparent whitespace-nowrap hidden sm:block">MaxCord</span>
         <div class="flex items-center gap-1.5 min-w-0">
           <span class="text-gray-500 text-sm">#</span>
           <span id="room-name-display" class="font-semibold text-white text-sm truncate max-w-[120px] sm:max-w-none"></span>

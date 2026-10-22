@@ -1,7 +1,7 @@
 {
-  "name": "streamhub",
+  "name": "maxcord",
   "version": "1.0.0",
-  "description": "Screen Sharing e Áudio/Vídeo via WebRTC em tempo real",
+  "description": "MaxCord - Transmissão de tela e áudio/vídeo via WebRTC em tempo real",
   "main": "server.js",
   "scripts": {
     "start": "node server.js"

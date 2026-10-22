@@ -342,7 +342,7 @@ app.get('/health', (req, res) => {
 server.listen(PORT, () => {
   console.log('');
   console.log('==================================');
-  console.log('       StreamHub - Servidor       ');
+  console.log('       MaxCord - Servidor         ');
   console.log('==================================');
   console.log(`  Porta:  ${PORT}`);
   console.log('  Auth:   Aberta (sem token)');
