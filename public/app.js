@@ -52,14 +52,46 @@ let compCameraEl = null;
 let compRAF = null;
 
 // ==================== ICE CONFIG ====================
+// STUN: descobre o IP público do usuário
+// TURN: retransmite o mídia quando conexão direta falha (NAT/firewall)
+// Open Relay Project — gratuito, sem cadastro
 
 const ICE_CONFIG = {
   iceServers: [
+    // STUN Google
     { urls: 'stun:stun.l.google.com:19302' },
     { urls: 'stun:stun1.l.google.com:19302' },
     { urls: 'stun:stun2.l.google.com:19302' },
-    { urls: 'stun:stun3.l.google.com:19302' }
-  ]
+    { urls: 'stun:stun3.l.google.com:19302' },
+    { urls: 'stun:stun4.l.google.com:19302' },
+
+    // STUN Open Relay
+    { urls: 'stun:openrelay.metered.ca:80' },
+
+    // TURN Open Relay — funciona mesmo em 4G e NAT restrito
+    {
+      urls: 'turn:openrelay.metered.ca:80',
+      username: 'openrelayproject',
+      credential: 'openrelayproject'
+    },
+    {
+      urls: 'turn:openrelay.metered.ca:443',
+      username: 'openrelayproject',
+      credential: 'openrelayproject'
+    },
+    {
+      urls: 'turn:openrelay.metered.ca:80?transport=tcp',
+      username: 'openrelayproject',
+      credential: 'openrelayproject'
+    },
+    {
+      urls: 'turn:openrelay.metered.ca:443?transport=tcp',
+      username: 'openrelayproject',
+      credential: 'openrelayproject'
+    }
+  ],
+  iceCandidatePoolSize: 10,
+  iceTransportPolicy: 'all'
 };
 
 // ==================== UTILITÁRIOS ====================
