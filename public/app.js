@@ -92,6 +92,10 @@ function isMobile() {
   return /Android|iPhone|iPad|iPod/i.test(navigator.userAgent) || window.innerWidth < 640;
 }
 
+function supportsScreenShare() {
+  return !!(navigator.mediaDevices && navigator.mediaDevices.getDisplayMedia);
+}
+
 function saveName(n) { try { localStorage.setItem('sh_username', n); } catch (_) {} }
 function loadName()  { try { return localStorage.getItem('sh_username') || ''; } catch (_) { return ''; } }
 function savePhoto(url) { try { localStorage.setItem('sh_photo', url); } catch (_) {} }
@@ -764,8 +768,8 @@ async function stopCamera() {
 }
 
 async function startScreenShare() {
-  if (!navigator.mediaDevices || !navigator.mediaDevices.getDisplayMedia) {
-    showToast('Compartilhamento de tela não suportado neste dispositivo', 'error');
+  if (!supportsScreenShare()) {
+    showToast('No celular use a Câmera para transmitir 📹', 'info');
     return;
   }
   try {
@@ -1088,9 +1092,11 @@ function leaveRoom(notify = true) {
 
   const grid = document.getElementById('streams-grid');
   grid.innerHTML = `<div id="no-stream" class="no-stream-placeholder">
-    <div class="text-5xl mb-3">📺</div>
-    <p class="text-base font-medium text-gray-400">Nenhuma transmissão ativa</p>
-    <p class="text-xs text-gray-600 mt-1">Compartilhe sua tela ou ligue a câmera para iniciar</p>
+    <div class="no-stream-icon">
+      <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="3" width="20" height="14" rx="2"/><path d="M8 21h8M12 17v4"/></svg>
+    </div>
+    <p class="no-stream-title">Nenhuma transmissão ativa</p>
+    <p class="no-stream-hint">Compartilhe sua tela ou ligue a câmera</p>
   </div>`;
   grid.className = 'streams-grid';
 
@@ -1130,8 +1136,8 @@ function renderParticipantsList() {
     const div = document.createElement('div');
     div.className = 'participant-item';
     div.innerHTML = `
-      <div class="avatar-bubble sm" style="background:linear-gradient(135deg,${col},${col}88)">${nameInitial(name)}</div>
-      <span class="p-name">${name}${isMe ? ' <span class="text-xs text-purple-400">(você)</span>' : ''}</span>
+      <div class="avatar avatar-sm" style="background:linear-gradient(135deg,${col},${col}88)">${nameInitial(name)}</div>
+      <span class="p-name">${name}${isMe ? ' <span style="font-size:10px;color:var(--accent-text)">(você)</span>' : ''}</span>
       <div class="p-badges">
         ${owner  ? '<span class="p-badge">👑</span>' : ''}
         ${vidIcon ? `<span class="p-badge">${vidIcon}</span>` : ''}
@@ -1156,8 +1162,14 @@ function updateToolbarUI() {
   const btnMic    = document.getElementById('btn-mic');
   const btnAudio  = document.getElementById('btn-audio');
 
-  btnScreen.className = `toolbar-btn${isScreenSharing ? ' active-screen' : ''}`;
-  btnScreen.querySelector('.btn-label').textContent = isScreenSharing ? 'Parar Tela' : 'Tela';
+  // Esconder botão de tela em dispositivos sem suporte (mobile)
+  if (!supportsScreenShare()) {
+    btnScreen.style.display = 'none';
+  } else {
+    btnScreen.style.display = '';
+    btnScreen.className = `toolbar-btn${isScreenSharing ? ' active-screen' : ''}`;
+    btnScreen.querySelector('.btn-label').textContent = isScreenSharing ? 'Parar Tela' : 'Tela';
+  }
 
   btnCamera.className = `toolbar-btn${isCameraOn ? ' active-camera' : ''}`;
   btnCamera.querySelector('.btn-label').textContent = isCameraOn ? 'Desligar' : 'Câmera';
@@ -1188,7 +1200,7 @@ function fetchRooms() {
   socket.emit('list-rooms', (res) => {
     const c = document.getElementById('rooms-list');
     if (!res.rooms || !res.rooms.length) {
-      c.innerHTML = '<p class="text-gray-500 text-sm text-center py-2">Nenhuma sala disponível no momento.</p>';
+      c.innerHTML = '<p class="rooms-empty">Nenhuma sala disponível no momento.</p>';
       return;
     }
     c.innerHTML = '';
@@ -1437,7 +1449,13 @@ document.getElementById('modal-forgot').addEventListener('click', (e) => {
 document.getElementById('forgot-confirm-password').addEventListener('keypress', e => { if (e.key === 'Enter') submitForgotPassword(); });
 document.getElementById('forgot-new-password').addEventListener('keypress', e => { if (e.key === 'Enter') document.getElementById('forgot-confirm-password').focus(); });
 
-document.getElementById('btn-share-screen').addEventListener('click', () => isScreenSharing ? stopScreenShare() : startScreenShare());
+document.getElementById('btn-share-screen').addEventListener('click', () => {
+  if (!supportsScreenShare()) {
+    showToast('No celular use a Câmera para transmitir 📹', 'info');
+    return;
+  }
+  isScreenSharing ? stopScreenShare() : startScreenShare();
+});
 document.getElementById('btn-camera').addEventListener('click', () => isCameraOn ? stopCamera() : startCamera());
 document.getElementById('btn-mic').addEventListener('click', toggleMic);
 document.getElementById('btn-audio').addEventListener('click', toggleAudio);
@@ -1491,9 +1509,90 @@ document.addEventListener('visibilitychange', () => {
   }
 });
 
+// ==================== SISTEMA DE TEMAS ====================
+
+const THEMES = [
+  { id: 'dark',      name: 'Dark'      },
+  { id: 'amoled',    name: 'AMOLED'    },
+  { id: 'light',     name: 'Light'     },
+  { id: 'cyberpunk', name: 'Cyberpunk' },
+  { id: 'ocean',     name: 'Ocean'     },
+  { id: 'forest',    name: 'Forest'    },
+  { id: 'ruby',      name: 'Ruby'      },
+  { id: 'synthwave', name: 'Synthwave' }
+];
+
+let currentTheme = 'dark';
+
+function applyTheme(themeId) {
+  const valid = THEMES.find(t => t.id === themeId);
+  if (!valid) themeId = 'dark';
+  currentTheme = themeId;
+
+  // Aplicar data-theme no html para as variáveis CSS funcionarem
+  document.documentElement.setAttribute('data-theme', themeId);
+
+  // Atualizar meta theme-color conforme o tema
+  const themeColors = {
+    dark:      '#0d0d14', amoled:    '#000000',
+    light:     '#f1f5f9', cyberpunk: '#0a0010',
+    ocean:     '#030d1a', forest:    '#060f08',
+    ruby:      '#0f0508', synthwave: '#0d0521'
+  };
+  const metaTheme = document.querySelector('meta[name="theme-color"]');
+  if (metaTheme) metaTheme.setAttribute('content', themeColors[themeId] || '#0d0d14');
+
+  // Salvar preferência
+  try { localStorage.setItem('mc_theme', themeId); } catch (_) {}
+
+  // Marcar card ativo no modal
+  document.querySelectorAll('.theme-card').forEach(card => {
+    card.classList.toggle('active', card.dataset.themeId === themeId);
+  });
+}
+
+function loadTheme() {
+  try {
+    const saved = localStorage.getItem('mc_theme');
+    return saved || 'dark';
+  } catch (_) { return 'dark'; }
+}
+
+function openThemeModal() {
+  // Atualizar estado ativo dos cards antes de abrir
+  document.querySelectorAll('.theme-card').forEach(card => {
+    card.classList.toggle('active', card.dataset.themeId === currentTheme);
+  });
+  document.getElementById('modal-themes').classList.remove('hidden');
+}
+
+function closeThemeModal() {
+  document.getElementById('modal-themes').classList.add('hidden');
+}
+
+// Event listeners para cards de tema
+document.querySelectorAll('.theme-card').forEach(card => {
+  card.addEventListener('click', () => {
+    applyTheme(card.dataset.themeId);
+  });
+});
+
+// Botões para abrir o modal (lobby e sala)
+document.getElementById('btn-theme-lobby').addEventListener('click', openThemeModal);
+document.getElementById('btn-theme-room').addEventListener('click', openThemeModal);
+document.getElementById('btn-themes-close').addEventListener('click', closeThemeModal);
+
+// Fechar ao clicar fora
+document.getElementById('modal-themes').addEventListener('click', e => {
+  if (e.target === document.getElementById('modal-themes')) closeThemeModal();
+});
+
 // ==================== INIT ====================
 
 (function init() {
+  // Aplicar tema salvo ANTES de tudo (evita flash de tema errado)
+  applyTheme(loadTheme());
+
   const saved = loadName();
   if (saved) {
     const el = document.getElementById('global-username');
