@@ -170,6 +170,9 @@
 
       <!-- Rodapé -->
       <footer class="lobby-footer">
+        <button id="btn-theme-lobby" class="btn-ghost-sm" style="font-size:13px;margin-bottom:12px">
+          🎨 Escolher Tema
+        </button>
         <div class="watermark-lobby">
           <span class="watermark-logo">MaxCord</span>
           <span class="watermark-sep">·</span>
@@ -212,6 +215,9 @@
       </div>
       <div id="lock-badge" class="room-lock-badge hidden">🔒</div>
       <button id="btn-delete-room" class="btn-danger-sm hidden">🗑</button>
+      <button id="btn-theme-room" class="btn-icon-sm" title="Temas">
+        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M12 2a10 10 0 0 1 0 20C7 22 2 17 2 12"/><circle cx="12" cy="12" r="3"/></svg>
+      </button>
       <button id="btn-toggle-participants" class="btn-icon-sm" title="Participantes">
         <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>
       </button>
@@ -308,6 +314,109 @@
     <div class="btn-row mt-4">
       <button id="btn-forgot-cancel" class="btn-secondary flex-1">Cancelar</button>
       <button id="btn-forgot-confirm" class="btn-primary flex-1">Redefinir</button>
+    </div>
+  </div>
+</div>
+
+<!-- ===================== MODAL TEMAS ===================== -->
+<div id="modal-themes" class="modal-overlay hidden" role="dialog" aria-modal="true" aria-label="Selecionar tema">
+  <div class="modal-box" style="max-width:480px">
+    <div class="modal-header">
+      <h2 class="modal-title">🎨 Escolher Tema</h2>
+      <button id="btn-themes-close" class="btn-icon-sm">✕</button>
+    </div>
+    <p class="modal-desc">Escolha a aparência do MaxCord. Salvo automaticamente.</p>
+
+    <div class="theme-grid">
+
+      <!-- Dark -->
+      <div class="theme-card tp-dark" data-theme-id="dark">
+        <div class="theme-card-preview">
+          <div class="tcp-bar"></div>
+          <div class="tcp-bar2"></div>
+          <div class="tcp-bar3"></div>
+          <div class="tcp-dot"></div>
+        </div>
+        <div class="theme-card-name">Dark</div>
+      </div>
+
+      <!-- AMOLED -->
+      <div class="theme-card tp-amoled" data-theme-id="amoled">
+        <div class="theme-card-preview">
+          <div class="tcp-bar"></div>
+          <div class="tcp-bar2"></div>
+          <div class="tcp-bar3"></div>
+          <div class="tcp-dot"></div>
+        </div>
+        <div class="theme-card-name">AMOLED</div>
+      </div>
+
+      <!-- Light -->
+      <div class="theme-card tp-light" data-theme-id="light">
+        <div class="theme-card-preview">
+          <div class="tcp-bar"></div>
+          <div class="tcp-bar2"></div>
+          <div class="tcp-bar3"></div>
+          <div class="tcp-dot"></div>
+        </div>
+        <div class="theme-card-name">Light</div>
+      </div>
+
+      <!-- Cyberpunk -->
+      <div class="theme-card tp-cyberpunk" data-theme-id="cyberpunk">
+        <div class="theme-card-preview">
+          <div class="tcp-bar"></div>
+          <div class="tcp-bar2"></div>
+          <div class="tcp-bar3"></div>
+          <div class="tcp-dot"></div>
+        </div>
+        <div class="theme-card-name">Cyberpunk</div>
+      </div>
+
+      <!-- Ocean -->
+      <div class="theme-card tp-ocean" data-theme-id="ocean">
+        <div class="theme-card-preview">
+          <div class="tcp-bar"></div>
+          <div class="tcp-bar2"></div>
+          <div class="tcp-bar3"></div>
+          <div class="tcp-dot"></div>
+        </div>
+        <div class="theme-card-name">Ocean</div>
+      </div>
+
+      <!-- Forest -->
+      <div class="theme-card tp-forest" data-theme-id="forest">
+        <div class="theme-card-preview">
+          <div class="tcp-bar"></div>
+          <div class="tcp-bar2"></div>
+          <div class="tcp-bar3"></div>
+          <div class="tcp-dot"></div>
+        </div>
+        <div class="theme-card-name">Forest</div>
+      </div>
+
+      <!-- Ruby -->
+      <div class="theme-card tp-ruby" data-theme-id="ruby">
+        <div class="theme-card-preview">
+          <div class="tcp-bar"></div>
+          <div class="tcp-bar2"></div>
+          <div class="tcp-bar3"></div>
+          <div class="tcp-dot"></div>
+        </div>
+        <div class="theme-card-name">Ruby</div>
+      </div>
+
+      <!-- Synthwave -->
+      <div class="theme-card tp-synthwave" data-theme-id="synthwave">
+        <div class="theme-card-preview">
+          <div class="tcp-bar"></div>
+          <div class="tcp-bar2"></div>
+          <div class="tcp-bar3"></div>
+          <div class="tcp-dot"></div>
+        </div>
+        <div class="theme-card-name">Synthwave</div>
+      </div>
+
     </div>
   </div>
 </div>
