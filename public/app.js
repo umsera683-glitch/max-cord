@@ -206,8 +206,14 @@ function setupSocketListeners() {
     setTimeout(() => leaveRoom(false), 1500);
   });
 
-  // Atualização da lista de salas em tempo real (enviada pelo servidor)
-  socket.on('room-list-update', (data) => {
+  // Receber foto de perfil de outro participante (enviada diretamente, não via servidor)
+  socket.on('photo-share', (data) => {
+    const p = participants.get(data.id);
+    if (p && data.photoUrl) {
+      p.photoUrl = data.photoUrl;
+      renderParticipantsList();
+    }
+  });
     // Só atualiza se o usuário estiver no lobby (não dentro de uma sala)
     if (!currentRoomId) {
       renderRoomsList(data.rooms);
@@ -259,15 +265,18 @@ function initPeerConnection(peerId, isInitiator) {
     }
   };
 
-  // FIX 7: onnegotiationneeded cuida de renegociações automáticas após addTrack
+  // FIX 7: onnegotiationneeded — protegido contra estados inválidos e glare
   pc.onnegotiationneeded = async () => {
-    // Só o lado que iniciou deve criar offer para evitar glare
+    if (pc.signalingState !== 'stable') return; // Não criar offer se já em negociação
     try {
       const offer = await pc.createOffer();
+      if (pc.signalingState !== 'stable') return; // Checar novamente após await
       await pc.setLocalDescription(offer);
       socket.emit('offer', { targetId: peerId, sdp: offer });
     } catch (err) {
-      console.error('onnegotiationneeded:', err);
+      if (!err.message.includes('InvalidStateError')) {
+        console.error('onnegotiationneeded:', err);
+      }
     }
   };
 
@@ -948,32 +957,24 @@ function toggleAudio() {
 
 // ==================== HELPERS DE BROADCAST ====================
 
-// FIX 4: broadcastVideoTrack com offer explícito para garantir que peers vejam a transmissão
+// FIX 4: broadcastVideoTrack — sem offer manual, deixa só o onnegotiationneeded trabalhar
+// O offer manual criava conflito com onnegotiationneeded (2 offers simultâneos → tela preta)
 function broadcastVideoTrack(videoTrack) {
   if (!videoTrack) return;
   const audioTrack = getMicAudioTrack();
 
-  for (const [peerId, entry] of peers) {
+  for (const [, entry] of peers) {
     if (!entry.pc) continue;
     const vs = entry.pc.getSenders().find(s => s.track && s.track.kind === 'video');
     if (vs) {
-      // Já tem sender — trocar track sem renegociar
+      // Já tem sender — só trocar o track (replaceTrack não dispara onnegotiationneeded)
       vs.replaceTrack(videoTrack).catch(err => console.error('broadcast replaceTrack:', err));
     } else {
-      // Sem sender — adicionar e forçar offer explícito
+      // Sem sender — addTrack dispara onnegotiationneeded automaticamente (agora protegido)
       const ls = new MediaStream([videoTrack]);
       if (audioTrack) ls.addTrack(audioTrack);
       entry.pc.addTrack(videoTrack, ls);
-
-      // Forçar offer manual (não depender só do onnegotiationneeded)
-      ;(async (pid, pc) => {
-        await new Promise(r => setTimeout(r, 150));
-        try {
-          const offer = await pc.createOffer();
-          await pc.setLocalDescription(offer);
-          socket.emit('offer', { targetId: pid, sdp: offer });
-        } catch (e) { console.error('broadcastVideoTrack offer:', e); }
-      })(peerId, entry.pc);
+      // onnegotiationneeded (protegido com signalingState) vai criar e enviar o offer
     }
   }
 }
