@@ -1018,8 +1018,14 @@ function validateName() {
 async function createRoom() {
   const name = validateName(); if (!name) return;
   const roomId   = document.getElementById('create-room-id').value.trim().toUpperCase() || generateRoomId();
-  const rName    = document.getElementById('create-room-name').value.trim() || roomId;
+  const rName    = document.getElementById('create-room-name').value.trim();
   const password = document.getElementById('create-password').value.trim();
+
+  if (!rName) {
+    showToast('Digite o nome da sala antes de criar', 'error');
+    document.getElementById('create-room-name').focus();
+    return;
+  }
 
   if (!(await connectSocket())) return;
   myName = name; saveName(name);
