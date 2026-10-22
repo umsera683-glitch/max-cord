@@ -9,8 +9,12 @@
   <meta name="theme-color" content="#0d0d14">
   <title>MaxCord</title>
   <script src="https://cdn.tailwindcss.com"></script>
-  <script>window.SOCKET_URL = 'https://max-cord.onrender.com';</script>
-  <script src="https://max-cord.onrender.com/socket.io/socket.io.js"></script>
+  <script>
+    window.SOCKET_URL = /netlify\.app$/i.test(location.hostname)
+      ? 'https://max-cord.onrender.com'
+      : location.origin;
+  </script>
+  <script src="https://cdn.socket.io/4.7.5/socket.io.min.js"></script>
   <link rel="stylesheet" href="/style.css">
 </head>
 <body>

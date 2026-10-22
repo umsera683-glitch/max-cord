@@ -1044,7 +1044,13 @@ button:active { opacity: 0.82; }
 
 .stream-tile:hover { border-color: var(--accent); }
 
-.stream-tile video { width: 100%; height: 100%; object-fit: contain; display: block; background: #000; }
+.stream-tile video {
+  width: 100%; height: 100%;
+  object-fit: contain;
+  display: block;
+  background: #000;
+  transform: translateZ(0);
+}
 .stream-tile.type-camera video { object-fit: cover; }
 
 .stream-tile-label {

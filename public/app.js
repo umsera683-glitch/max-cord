@@ -1,16 +1,8 @@
 'use strict';
 // =====================================================================
-//  StreamHub — app.js  (versão corrigida)
-//
-//  Bugs corrigidos:
-//  1. stopScreenShare: onended=null antes de .stop() evita double-call
-//  2. request-peer handler: isInitiator=true para criar offer
-//  3. renegotiateWithPeer: sempre usa mapa peers para encontrar peerId
-//  4. broadcastVideoTrack: renegocia após addTrack
-//  5. handleRemoteTrack: cria stream local se event.streams[0] undefined
-//  6. toggleMic: funciona sem câmera/tela ativa
-//  7. onnegotiationneeded: configurado em cada PC para renegociação automática
-//  8. Tile self-preview: updateSelfPreview decide criar/atualizar/remover
+//  MaxCord — app.js
+//  Mesh WebRTC com negociação perfeita (um offer por par) para
+//  várias pessoas transmitirem tela ao mesmo tempo sem tela preta.
 // =====================================================================
 
 // ==================== ESTADO GLOBAL ====================
@@ -33,9 +25,12 @@ let isCameraOn = false;
 let isMicOn = false;
 let isAudioMuted = false;
 
-// peerId -> { pc: RTCPeerConnection, streams: Map }
+// peerId -> { pc, streams, makingOffer, ignoreOffer, polite }
 const peers = new Map();
 const pendingIce = new Map();
+let socketListenersBound = false;
+let lastJoinPassword = '';
+let screenShareBusy = false;
 
 // id -> { name, isOwner, isBroadcasting, broadcastType, hasMic, micMuted }
 const participants = new Map();
@@ -58,42 +53,28 @@ let compRAF = null;
 
 const ICE_CONFIG = {
   iceServers: [
-    // STUN Google — rápidos para descoberta de IP público
     { urls: 'stun:stun.l.google.com:19302' },
     { urls: 'stun:stun1.l.google.com:19302' },
-    { urls: 'stun:stun2.l.google.com:19302' },
-    // STUN Cloudflare — muito rápido
     { urls: 'stun:stun.cloudflare.com:3478' },
-    // STUN Open Relay
-    { urls: 'stun:openrelay.metered.ca:80' },
-
-    // TURN Open Relay — usado como FALLBACK quando conexão direta falha
     {
-      urls: 'turn:openrelay.metered.ca:80',
-      username: 'openrelayproject',
-      credential: 'openrelayproject'
-    },
-    {
-      urls: 'turn:openrelay.metered.ca:443',
-      username: 'openrelayproject',
-      credential: 'openrelayproject'
-    },
-    {
-      urls: 'turn:openrelay.metered.ca:80?transport=tcp',
-      username: 'openrelayproject',
-      credential: 'openrelayproject'
-    },
-    {
-      urls: 'turn:openrelay.metered.ca:443?transport=tcp',
+      urls: [
+        'turn:openrelay.metered.ca:80',
+        'turn:openrelay.metered.ca:443',
+        'turn:openrelay.metered.ca:443?transport=tcp'
+      ],
       username: 'openrelayproject',
       credential: 'openrelayproject'
     }
   ],
-  iceCandidatePoolSize: 20,     // Pré-coleta mais candidatos para conectar mais rápido
-  iceTransportPolicy: 'all',    // Tenta conexão direta primeiro (mais rápido), TURN como fallback
-  bundlePolicy: 'max-bundle',   // Agrupa mídia numa única conexão
-  rtcpMuxPolicy: 'require'      // Economiza portas, conecta mais rápido
+  iceCandidatePoolSize: 4,
+  iceTransportPolicy: 'all',
+  bundlePolicy: 'max-bundle',
+  rtcpMuxPolicy: 'require'
 };
+
+function shouldOffer(peerId) {
+  return !!(myId && peerId && myId < peerId);
+}
 
 // ==================== UTILITÁRIOS ====================
 
@@ -140,30 +121,42 @@ function connectSocket() {
   return new Promise(resolve => {
     if (socket && socket.connected) return resolve(true);
 
-    socket = io(window.SOCKET_URL || location.origin, {
-      transports: ['websocket', 'polling'],
-      reconnectionAttempts: 5,
-      reconnectionDelay: 1000,
-      reconnectionDelayMax: 3000,
-      timeout: 5000          // Reduzido de 10s para 5s
-    });
+    if (!socket) {
+      socket = io(window.SOCKET_URL || location.origin, {
+        transports: ['websocket', 'polling'],
+        reconnectionAttempts: 8,
+        reconnectionDelay: 800,
+        reconnectionDelayMax: 4000,
+        timeout: 8000
+      });
+      setupSocketListeners();
+    }
 
-    socket.on('connect', () => { myId = socket.id; setupSocketListeners(); resolve(true); });
-    socket.on('connect_error', err => {
-      console.warn('Socket connect_error:', err.message);
-      resolve(false);
-    });
-    socket.on('disconnect', () => showToast('Conexão perdida. Reconectando...', 'error'));
-    socket.on('reconnect', () => { myId = socket.id; showToast('Reconectado!', 'success'); });
-    setTimeout(() => { if (!socket.connected) resolve(false); }, 6000); // Reduzido de 10s
+    const onOk = () => { myId = socket.id; cleanup(); resolve(true); };
+    const onErr = (err) => {
+      console.warn('Socket connect_error:', err && err.message);
+      cleanup();
+      resolve(!!socket.connected);
+    };
+    const cleanup = () => {
+      socket.off('connect', onOk);
+      socket.off('connect_error', onErr);
+    };
+    socket.on('connect', onOk);
+    socket.on('connect_error', onErr);
+    if (socket.connected) onOk();
+    setTimeout(() => { if (!socket.connected) { cleanup(); resolve(false); } }, 8000);
   });
 }
 
 // ==================== LISTENERS DO SOCKET ====================
 
 function setupSocketListeners() {
+  if (!socket || socketListenersBound) return;
+  socketListenersBound = true;
 
   socket.on('user-joined', (data) => {
+    if (!data || !data.id || data.id === myId) return;
     participants.set(data.id, {
       name: data.name, isOwner: data.isOwner,
       isBroadcasting: false, broadcastType: null, hasMic: false, micMuted: true,
@@ -172,8 +165,7 @@ function setupSocketListeners() {
     updateParticipantCount();
     renderParticipantsList();
     showToast(`${data.name} entrou na sala`, 'info');
-    // Quem JÁ ESTAVA na sala faz offer para o recém-chegado
-    initPeerConnection(data.id, true);
+    connectToPeer(data.id);
   });
 
   socket.on('user-left', (data) => {
@@ -227,10 +219,21 @@ function setupSocketListeners() {
     }
   });
 
-  // FIX 2a: quem recebe request-peer também faz offer (isInitiator=true)
-  // Ambos os lados criam offer — o lado que chegar primeiro com setRemoteDescription vence
   socket.on('request-peer', ({ fromId }) => {
-    initPeerConnection(fromId, true);
+    if (fromId && fromId !== myId) connectToPeer(fromId);
+  });
+
+  socket.on('disconnect', (reason) => {
+    if (reason === 'io client disconnect') return;
+    showToast('Conexão perdida. Reconectando...', 'error');
+  });
+
+  socket.on('connect', () => {
+    const previousId = myId;
+    myId = socket.id;
+    if (currentRoomId && previousId && previousId !== myId) {
+      rejoinAfterReconnect();
+    }
   });
 
   socket.on('offer',         async ({ fromId, sdp })       => handleOffer(fromId, sdp));
@@ -241,77 +244,88 @@ function setupSocketListeners() {
 // ==================== PEER CONNECTIONS ====================
 
 function getPeerEntry(peerId) {
-  if (!peers.has(peerId)) peers.set(peerId, { pc: null, streams: new Map() });
+  if (!peers.has(peerId)) {
+    peers.set(peerId, {
+      pc: null,
+      streams: new Map(),
+      makingOffer: false,
+      ignoreOffer: false
+    });
+  }
   return peers.get(peerId);
 }
 
-// Dado um PC, retorna o peerId consultando o mapa
-function findPeerId(pc) {
-  for (const [id, entry] of peers) {
-    if (entry.pc === pc) return id;
-  }
-  return null;
+function pcIsUsable(pc) {
+  if (!pc) return false;
+  const cs = pc.connectionState;
+  return cs !== 'closed' && cs !== 'failed' && pc.signalingState !== 'closed';
 }
 
-function initPeerConnection(peerId, isInitiator) {
+function connectToPeer(peerId) {
+  if (!peerId || peerId === myId) return null;
   const entry = getPeerEntry(peerId);
+  if (pcIsUsable(entry.pc)) {
+    addLocalTracksToPeer(entry.pc);
+    return entry.pc;
+  }
+  return createPeerConnection(peerId);
+}
 
-  // Fechar PC anterior
-  if (entry.pc) { try { entry.pc.close(); } catch (_) {} entry.pc = null; }
+function createPeerConnection(peerId) {
+  const entry = getPeerEntry(peerId);
+  if (entry.pc) { try { entry.pc.close(); } catch (_) {} }
 
   const pc = new RTCPeerConnection(ICE_CONFIG);
   entry.pc = pc;
+  entry.makingOffer = false;
+  entry.ignoreOffer = false;
 
   pc.onicecandidate = (e) => {
-    if (e.candidate) socket.emit('ice-candidate', { targetId: peerId, candidate: e.candidate });
-  };
-
-  pc.onconnectionstatechange = () => {
-    if (pc.connectionState === 'failed' || pc.connectionState === 'closed') {
-      closePeer(peerId);
+    if (e.candidate && socket) {
+      socket.emit('ice-candidate', { targetId: peerId, candidate: e.candidate });
     }
   };
 
-  // FIX 7: onnegotiationneeded — protegido contra estados inválidos e glare
+  pc.oniceconnectionstatechange = () => {
+    if (pc.iceConnectionState === 'failed') {
+      try { pc.restartIce(); } catch (_) {}
+    }
+  };
+
+  pc.onconnectionstatechange = () => {
+    if (pc.connectionState === 'failed') {
+      try { pc.restartIce(); } catch (_) {}
+      setTimeout(() => {
+        if (peers.get(peerId) && peers.get(peerId).pc === pc && pc.connectionState === 'failed') {
+          createPeerConnection(peerId);
+        }
+      }, 1500);
+    }
+  };
+
   pc.onnegotiationneeded = async () => {
-    if (pc.signalingState !== 'stable') return; // Não criar offer se já em negociação
     try {
-      const offer = await pc.createOffer();
-      if (pc.signalingState !== 'stable') return; // Checar novamente após await
-      await pc.setLocalDescription(offer);
-      socket.emit('offer', { targetId: peerId, sdp: offer });
+      entry.makingOffer = true;
+      await pc.setLocalDescription(await pc.createOffer());
+      if (socket) socket.emit('offer', { targetId: peerId, sdp: pc.localDescription });
     } catch (err) {
-      if (!err.message.includes('InvalidStateError')) {
+      if (!String(err && err.message).includes('InvalidStateError')) {
         console.error('onnegotiationneeded:', err);
       }
+    } finally {
+      entry.makingOffer = false;
     }
   };
 
   pc.ontrack = (e) => handleRemoteTrack(peerId, e);
 
-  // Adicionar tracks locais existentes
   addLocalTracksToPeer(pc);
-
-  if (isInitiator) {
-    setTimeout(async () => {
-      try {
-        const offer = await pc.createOffer();
-        await pc.setLocalDescription(offer);
-        socket.emit('offer', { targetId: peerId, sdp: offer });
-      } catch (err) {
-        console.error('initPeer offer:', err);
-      }
-    }, 100); // Reduzido de 200ms para 100ms
-  }
-
   return pc;
 }
 
-// Adiciona todas as tracks locais ativas ao PC
 function addLocalTracksToPeer(pc) {
   const videoTrack = getCurrentVideoTrack();
   const audioTrack = getMicAudioTrack();
-
   if (!videoTrack && !audioTrack) return;
 
   const ls = new MediaStream();
@@ -319,26 +333,33 @@ function addLocalTracksToPeer(pc) {
   if (audioTrack) ls.addTrack(audioTrack);
 
   ls.getTracks().forEach(track => {
-    // Verificar se já foi adicionado
-    const already = pc.getSenders().find(s => s.track === track);
-    if (!already) pc.addTrack(track, ls);
+    const sender = pc.getSenders().find(s => s.track && s.track.kind === track.kind);
+    if (sender) {
+      if (sender.track !== track) {
+        sender.replaceTrack(track).catch(err => console.error('replaceTrack:', err));
+      }
+    } else {
+      pc.addTrack(track, ls);
+    }
+    if (track.kind === 'video') {
+      const vs = pc.getSenders().find(s => s.track === track);
+      if (vs) optimizeVideoSender(vs);
+    }
   });
 }
 
-// FIX 2b/3: replaceVideoTrackInPeer não precisa mais de renegotiateWithPeer manual
-// pois onnegotiationneeded é disparado automaticamente após addTrack
 function replaceVideoTrackInPeer(pc, newTrack) {
   const senders = pc.getSenders();
-  const vs = senders.find(s => s.track && s.track.kind === 'video');
-  if (vs) {
-    vs.replaceTrack(newTrack).catch(err => console.error('replaceVideoTrack:', err));
-  } else {
-    const audioSender = senders.find(s => s.track && s.track.kind === 'audio');
-    const ls = new MediaStream([newTrack]);
-    if (audioSender && audioSender.track) ls.addTrack(audioSender.track);
-    pc.addTrack(newTrack, ls);
-    // onnegotiationneeded será disparado automaticamente
+  const sender = senders.find(s => s.track && s.track.kind === 'video');
+  if (sender) {
+    sender.replaceTrack(newTrack).then(() => optimizeVideoSender(sender)).catch(err => console.error('replaceVideoTrack:', err));
+    return;
   }
+  const audioSender = senders.find(s => s.track && s.track.kind === 'audio');
+  const ls = new MediaStream([newTrack]);
+  if (audioSender && audioSender.track) ls.addTrack(audioSender.track);
+  const added = pc.addTrack(newTrack, ls);
+  optimizeVideoSender(added);
 }
 
 function replaceAudioTrackInPeer(pc, newTrack) {
@@ -351,31 +372,45 @@ function replaceAudioTrackInPeer(pc, newTrack) {
     const ls = new MediaStream([newTrack]);
     if (videoSender && videoSender.track) ls.addTrack(videoSender.track);
     pc.addTrack(newTrack, ls);
-    // onnegotiationneeded será disparado automaticamente
   }
 }
 
+async function optimizeVideoSender(sender) {
+  if (!sender || typeof sender.getParameters !== 'function') return;
+  try {
+    const params = sender.getParameters();
+    if (!params.encodings || !params.encodings.length) params.encodings = [{}];
+    const n = Math.max(1, peers.size);
+    const isScreen = isScreenSharing;
+    params.encodings[0].maxBitrate = isScreen
+      ? Math.round(Math.min(2_500_000, Math.max(700_000, 2_200_000 / Math.sqrt(n))))
+      : Math.round(Math.min(1_200_000, Math.max(350_000, 900_000 / Math.sqrt(n))));
+    params.encodings[0].maxFramerate = isScreen ? 24 : 24;
+    params.degradationPreference = isScreen ? 'maintain-resolution' : 'balanced';
+    await sender.setParameters(params);
+  } catch (_) {}
+}
+
 async function handleOffer(fromId, sdp) {
+  if (!fromId || fromId === myId || !sdp) return;
+  const pc = connectToPeer(fromId);
   const entry = getPeerEntry(fromId);
-  if (!entry.pc) initPeerConnection(fromId, false);
-  const pc = entry.pc;
+  const polite = !shouldOffer(fromId);
 
   try {
-    // Se já tem oferta local pendente (glare), o lado com menor ID vence
-    if (pc.signalingState === 'have-local-offer') {
-      if (myId < fromId) {
-        // Eu tenho precedência — ignorar a oferta remota
-        return;
-      }
-      // O outro lado tem precedência — descartar minha oferta
-      await pc.setLocalDescription({ type: 'rollback' });
+    const offerCollision = entry.makingOffer || pc.signalingState !== 'stable';
+    entry.ignoreOffer = !polite && offerCollision;
+    if (entry.ignoreOffer) return;
+
+    if (offerCollision && pc.signalingState === 'have-local-offer') {
+      try { await pc.setLocalDescription({ type: 'rollback' }); } catch (_) {}
     }
 
     await pc.setRemoteDescription(new RTCSessionDescription(sdp));
     flushIce(fromId, pc);
-    const answer = await pc.createAnswer();
-    await pc.setLocalDescription(answer);
-    socket.emit('answer', { targetId: fromId, sdp: answer });
+    addLocalTracksToPeer(pc);
+    await pc.setLocalDescription(await pc.createAnswer());
+    socket.emit('answer', { targetId: fromId, sdp: pc.localDescription });
   } catch (err) {
     console.error('handleOffer:', err);
   }
@@ -383,7 +418,8 @@ async function handleOffer(fromId, sdp) {
 
 async function handleAnswer(fromId, sdp) {
   const entry = peers.get(fromId);
-  if (!entry || !entry.pc) return;
+  if (!entry || !entry.pc || !sdp) return;
+  if (entry.pc.signalingState !== 'have-local-offer') return;
   try {
     await entry.pc.setRemoteDescription(new RTCSessionDescription(sdp));
     flushIce(fromId, entry.pc);
@@ -416,40 +452,98 @@ function closePeer(peerId) {
 
 // ==================== TRACKS REMOTOS ====================
 
-// FIX 5: cria stream local se event.streams[0] for undefined
-// FIX ÁUDIO: quem transmite não ouve o próprio áudio de volta
 function handleRemoteTrack(peerId, event) {
-  const stream = event.streams[0] || (() => {
-    const s = new MediaStream();
-    s.addTrack(event.track);
-    return s;
-  })();
+  if (!event || !event.track) return;
+  if (peerId === myId) return;
 
   const entry = getPeerEntry(peerId);
-  entry.streams.set(stream.id, stream);
+  let stream = event.streams && event.streams[0];
+  if (!stream) {
+    stream = entry.streams.get('remote') || new MediaStream();
+    if (!stream.getTracks().includes(event.track)) stream.addTrack(event.track);
+    entry.streams.set('remote', stream);
+  } else {
+    entry.streams.set(stream.id, stream);
+  }
 
-  const hasVideo = stream.getVideoTracks().length > 0;
-  const hasAudio = stream.getAudioTracks().length > 0;
+  event.track.addEventListener('unmute', () => {
+    if (event.track.kind === 'video') upsertVideoTile(peerId, stream);
+  });
+  event.track.addEventListener('ended', () => {
+    if (event.track.kind === 'video' && !stream.getVideoTracks().some(t => t.readyState === 'live')) {
+      removeVideoTile(peerId);
+    }
+  });
 
-  // Se este stream veio do próprio usuário (eco), ignorar áudio
-  const isOwnEcho = (peerId === myId);
-
-  if (hasVideo) {
+  if (event.track.kind === 'video') {
     upsertVideoTile(peerId, stream);
-  } else if (hasAudio && !isOwnEcho) {
+  } else if (event.track.kind === 'audio') {
+    const videoTile = document.getElementById(`${peerId}-video`);
+    if (videoTile) {
+      const video = videoTile.querySelector('video');
+      if (video && video.srcObject === stream) {
+        video.muted = isAudioMuted;
+        video.play().catch(() => {});
+        return;
+      }
+    }
     const p = participants.get(peerId);
     upsertAudioTile(peerId, stream, p ? p.name : 'Remoto');
   }
-
-  // Mutar: eco próprio SEMPRE mudo; outros obedecem isAudioMuted
-  document.querySelectorAll('#streams-grid video, #streams-grid audio').forEach(el => {
-    if (el.srcObject === stream) {
-      el.muted = isOwnEcho ? true : isAudioMuted;
-    }
-  });
 }
 
 // ==================== TILES ====================
+
+function revealVideoEl(video) {
+  if (!video) return;
+  video.style.opacity = '1';
+  video.style.transition = 'opacity 0.25s ease';
+  const tile = video.closest('.stream-tile');
+  const loader = tile && tile.querySelector('.tile-loader');
+  if (loader) loader.style.display = 'none';
+}
+
+function bindVideoPlayback(video, stream, peerId) {
+  video.srcObject = stream;
+  video.autoplay = true;
+  video.playsInline = true;
+  video.setAttribute('playsinline', '');
+  video.setAttribute('webkit-playsinline', '');
+  const isSelf = peerId === myId;
+  video.muted = isSelf ? true : true;
+
+  const tryPlay = () => {
+    const p = video.play();
+    if (p && p.then) {
+      p.then(() => {
+        if (!isSelf && !isAudioMuted) video.muted = false;
+      }).catch(() => {
+        video.muted = true;
+        video.play().catch(() => {});
+      });
+    }
+  };
+
+  const onFrame = () => {
+    if (video.videoWidth > 0 || video.readyState >= 2) revealVideoEl(video);
+  };
+
+  video.addEventListener('loadedmetadata', onFrame);
+  video.addEventListener('loadeddata', onFrame);
+  video.addEventListener('playing', onFrame);
+  video.addEventListener('resize', onFrame);
+  if (typeof video.requestVideoFrameCallback === 'function') {
+    video.requestVideoFrameCallback(() => revealVideoEl(video));
+  }
+  tryPlay();
+  setTimeout(onFrame, 400);
+  setTimeout(() => {
+    if (video.style.opacity !== '1') {
+      revealVideoEl(video);
+      tryPlay();
+    }
+  }, 2500);
+}
 
 function upsertVideoTile(peerId, stream) {
   const tileId = `${peerId}-video`;
@@ -462,7 +556,6 @@ function upsertVideoTile(peerId, stream) {
     tile.dataset.peerId = peerId;
     tile.addEventListener('click', () => makeTileFullscreen(tile));
 
-    // ── Loader (visível enquanto o vídeo não tem frames) ──
     const loader = document.createElement('div');
     loader.className = 'tile-loader';
     loader.innerHTML = `
@@ -471,30 +564,9 @@ function upsertVideoTile(peerId, stream) {
     tile.appendChild(loader);
 
     const video = document.createElement('video');
-    video.autoplay = true;
-    video.playsInline = true;
-    video.setAttribute('playsinline', '');
-    video.muted = (peerId === myId) ? true : isAudioMuted;
-    video.srcObject = stream;
-    video.style.opacity = '0';  // Esconde até ter frames
+    video.style.opacity = '0';
     tile.appendChild(video);
-
-    // Quando o primeiro frame chegar, esconde o loader e mostra o vídeo
-    video.addEventListener('loadeddata', function onLoaded() {
-      video.style.opacity = '1';
-      video.style.transition = 'opacity 0.4s ease';
-      loader.style.display = 'none';
-      video.removeEventListener('loadeddata', onLoaded);
-    });
-
-    // Fallback: se demorar mais de 15s ainda aguardando, mostrar mensagem
-    const timeout = setTimeout(() => {
-      if (video.style.opacity === '0') {
-        loader.querySelector('.tile-loader-text').textContent = 'Aguardando stream...';
-      }
-    }, 15000);
-
-    video.addEventListener('loadeddata', () => clearTimeout(timeout), { once: true });
+    bindVideoPlayback(video, stream, peerId);
 
     const label = document.createElement('div');
     label.className = 'stream-tile-label';
@@ -507,23 +579,18 @@ function upsertVideoTile(peerId, stream) {
   } else {
     const video = tile.querySelector('video');
     if (video && video.srcObject !== stream) {
-      video.srcObject = stream;
-      // Resetar opacity se stream foi trocado
-      if (video.style.opacity === '1') return; // já estava visível
-      video.style.opacity = '0';
-      const loader = tile.querySelector('.tile-loader');
-      if (loader) loader.style.display = '';
-      video.addEventListener('loadeddata', function onLoaded() {
-        video.style.opacity = '1';
-        if (loader) loader.style.display = 'none';
-        video.removeEventListener('loadeddata', onLoaded);
-      });
+      bindVideoPlayback(video, stream, peerId);
+    } else if (video) {
+      video.play().catch(() => {});
+      if (video.videoWidth > 0) revealVideoEl(video);
     }
   }
 
   const p = participants.get(peerId);
   const name = peerId === myId ? myName + ' (você)' : (p ? p.name : 'Remoto');
   const type = (p && p.broadcastType) || 'screen';
+  tile.classList.toggle('type-camera', type === 'camera');
+  tile.classList.toggle('type-screen', type !== 'camera');
   updateTileLabel(tile, name, type);
 }
 
@@ -554,6 +621,7 @@ function upsertAudioTile(peerId, stream, name) {
   audio.muted = isAudioMuted;
   audio.style.display = 'none';
   tile.appendChild(audio);
+  audio.play().catch(() => {});
 
   document.getElementById('streams-grid').appendChild(tile);
   tiles.set(tileId, tile);
@@ -636,15 +704,19 @@ function startComposite() {
 
   compScreenEl.srcObject = new MediaStream(screenStream.getVideoTracks());
   compCameraEl.srcObject = new MediaStream(cameraStream.getVideoTracks());
+  compScreenEl.muted = true;
+  compCameraEl.muted = true;
   compScreenEl.play().catch(() => {});
   compCameraEl.play().catch(() => {});
 
-  compositeStream = compositeCanvas.captureStream(25);
+  compositeStream = compositeCanvas.captureStream(20);
 
-  let loaded = 0;
-  const onReady = () => { if (++loaded >= 2 && !compRAF) drawComposite(); };
-  compScreenEl.readyState >= 1 ? onReady() : compScreenEl.addEventListener('loadedmetadata', onReady, { once: true });
-  compCameraEl.readyState >= 1 ? onReady() : compCameraEl.addEventListener('loadedmetadata', onReady, { once: true });
+  const kick = () => { if (!compRAF) drawComposite(); };
+  if (compScreenEl.videoWidth > 0) kick();
+  else {
+    compScreenEl.addEventListener('loadeddata', kick, { once: true });
+    compScreenEl.addEventListener('playing', kick, { once: true });
+  }
 
   return compositeStream;
 }
@@ -653,10 +725,9 @@ function drawComposite() {
   if (!compositeCtx || !isScreenSharing || !isCameraOn) { compRAF = null; return; }
   const w = compositeCanvas.width, h = compositeCanvas.height;
 
-  compositeCtx.fillStyle = '#000';
-  compositeCtx.fillRect(0, 0, w, h);
-
-  if (compScreenEl && compScreenEl.videoWidth > 0) compositeCtx.drawImage(compScreenEl, 0, 0, w, h);
+  if (compScreenEl && compScreenEl.videoWidth > 0) {
+    compositeCtx.drawImage(compScreenEl, 0, 0, w, h);
+  }
 
   if (compCameraEl && compCameraEl.videoWidth > 0) {
     const camW = Math.round(w * 0.22);
@@ -861,47 +932,65 @@ async function stopCamera() {
   showToast('Câmera desligada', 'info');
 }
 
+async function acquireDisplayMedia() {
+  const attempts = [
+    {
+      video: {
+        frameRate: { ideal: 24, max: 30 },
+        width: { ideal: 1920, max: 1920 },
+        height: { ideal: 1080, max: 1080 }
+      },
+      audio: true,
+      systemAudio: 'include',
+      selfBrowserSurface: 'exclude',
+      surfaceSwitching: 'include',
+      monitorTypeSurfaces: 'include'
+    },
+    { video: { frameRate: { ideal: 24 } }, audio: true },
+    { video: true, audio: false }
+  ];
+  let lastErr;
+  for (const constraints of attempts) {
+    try {
+      return await navigator.mediaDevices.getDisplayMedia(constraints);
+    } catch (err) {
+      lastErr = err;
+      if (err && err.name === 'NotAllowedError') throw err;
+    }
+  }
+  throw lastErr || new Error('getDisplayMedia failed');
+}
+
 async function startScreenShare() {
   if (!supportsScreenShare()) {
     showToast('No celular use a Câmera para transmitir 📹', 'info');
     return;
   }
+  if (screenShareBusy || isScreenSharing) return;
+  screenShareBusy = true;
   try {
-    // Pede áudio do sistema junto com a tela (funciona no Chrome/Edge desktop)
-    screenStream = await navigator.mediaDevices.getDisplayMedia({
-      video: { cursor: 'always', frameRate: { ideal: 30 } },
-      audio: {
-        echoCancellation: false,
-        noiseSuppression: false,
-        autoGainControl:  false
-      }
-    });
+    screenStream = await acquireDisplayMedia();
     isScreenSharing = true;
 
-    const screenAudioTrack = screenStream.getAudioTracks()[0] || null;
+    const videoTrack = screenStream.getVideoTracks()[0];
+    if (videoTrack) {
+      try { videoTrack.contentHint = 'detail'; } catch (_) {}
+      videoTrack.onended = () => {
+        if (isScreenSharing) stopScreenShare();
+      };
+    }
 
-    // Garantir microfone ativo
+    const screenAudioTrack = screenStream.getAudioTracks()[0] || null;
     if (!micStream) await startMic();
 
-    // FIX 1: cancelar onended antes de parar para evitar double-call
-    screenStream.getVideoTracks()[0].onended = () => {
-      if (isScreenSharing) stopScreenShare();
-    };
+    broadcastVideoTrack(getCurrentVideoTrack());
 
-    const videoTrack = getCurrentVideoTrack();
-    broadcastVideoTrack(videoTrack);
-
-    // ---- ÁUDIO: mesclar áudio do sistema + microfone ----
     let audioTrackToSend = getMicAudioTrack();
-
     if (screenAudioTrack && audioTrackToSend) {
-      // Mesclar áudio do sistema com microfone via AudioContext
       audioTrackToSend = await mergeAudioTracks(screenAudioTrack, audioTrackToSend);
     } else if (screenAudioTrack) {
-      // Só áudio do sistema (sem mic)
       audioTrackToSend = screenAudioTrack;
     }
-    // Se só mic e sem áudio do sistema, audioTrackToSend já é o mic
 
     if (audioTrackToSend) {
       for (const [, entry] of peers) {
@@ -916,11 +1005,13 @@ async function startScreenShare() {
   } catch (err) {
     isScreenSharing = false;
     console.error('Screen share error:', err);
-    if (err.name === 'NotAllowedError') {
+    if (err && err.name === 'NotAllowedError') {
       showToast('Permissão negada para compartilhar a tela', 'error');
     } else {
       showToast('Não foi possível compartilhar a tela', 'error');
     }
+  } finally {
+    screenShareBusy = false;
   }
 }
 
@@ -992,8 +1083,9 @@ async function stopScreenShare() {
 function toggleAudio() {
   isAudioMuted = !isAudioMuted;
   document.querySelectorAll('#streams-grid video, #streams-grid audio').forEach(el => {
-    // Nunca mutar o próprio preview
-    if (el.muted !== true || el.id !== `${myId}-video`) el.muted = isAudioMuted;
+    const tile = el.closest('.stream-tile');
+    const isSelf = tile && tile.dataset.peerId === myId;
+    el.muted = isSelf ? true : isAudioMuted;
   });
   updateToolbarUI();
   showToast(isAudioMuted ? 'Áudio silenciado' : 'Áudio ativado', isAudioMuted ? 'info' : 'success');
@@ -1005,21 +1097,9 @@ function toggleAudio() {
 // O offer manual criava conflito com onnegotiationneeded (2 offers simultâneos → tela preta)
 function broadcastVideoTrack(videoTrack) {
   if (!videoTrack) return;
-  const audioTrack = getMicAudioTrack();
-
+  try { videoTrack.contentHint = videoTrack.contentHint || (isScreenSharing ? 'detail' : 'motion'); } catch (_) {}
   for (const [, entry] of peers) {
-    if (!entry.pc) continue;
-    const vs = entry.pc.getSenders().find(s => s.track && s.track.kind === 'video');
-    if (vs) {
-      // Já tem sender — só trocar o track (replaceTrack não dispara onnegotiationneeded)
-      vs.replaceTrack(videoTrack).catch(err => console.error('broadcast replaceTrack:', err));
-    } else {
-      // Sem sender — addTrack dispara onnegotiationneeded automaticamente (agora protegido)
-      const ls = new MediaStream([videoTrack]);
-      if (audioTrack) ls.addTrack(audioTrack);
-      entry.pc.addTrack(videoTrack, ls);
-      // onnegotiationneeded (protegido com signalingState) vai criar e enviar o offer
-    }
+    if (entry.pc) replaceVideoTrackInPeer(entry.pc, videoTrack);
   }
 }
 
@@ -1033,9 +1113,8 @@ function replaceVideoInAllPeers(newTrack) {
 function clearVideoInAllPeers() {
   for (const [, entry] of peers) {
     if (!entry.pc) continue;
-    const senders = entry.pc.getSenders();
-    const vs = senders.find(s => s.track && s.track.kind === 'video');
-    if (vs) entry.pc.removeTrack(vs);
+    const vs = entry.pc.getSenders().find(s => s.track && s.track.kind === 'video');
+    if (vs) vs.replaceTrack(null).catch(() => {});
   }
 }
 
@@ -1078,6 +1157,9 @@ function updateSelfPreview() {
   }
 
   const video = tile.querySelector('video');
+  video.muted = true;
+  video.autoplay = true;
+  video.playsInline = true;
   if (isCameraOn && cameraStream) {
     video.srcObject = cameraStream;
     tile.className = 'stream-tile type-camera';
@@ -1087,6 +1169,7 @@ function updateSelfPreview() {
     tile.className = 'stream-tile type-screen';
     updateTileLabel(tile, myName + ' (você)', 'screen');
   }
+  video.play().catch(() => {});
 }
 
 function stopAllMedia() {
@@ -1126,6 +1209,7 @@ async function createRoom() {
 
   if (!(await connectSocket())) return;
   myName = name; saveName(name);
+  lastJoinPassword = password || '';
 
   socket.emit('create-room', { roomId, roomName: rName, password, userName: name, photoUrl: loadPhoto() }, (res) => {
     if (res.success) { isOwner = true; enterRoom(res.roomId, rName, true); }
@@ -1141,6 +1225,7 @@ async function joinRoom(roomId, password) {
 
   if (!(await connectSocket())) return;
   myName = name; saveName(name);
+  lastJoinPassword = password || '';
 
   socket.emit('join-room', { roomId, password, userName: name, photoUrl: loadPhoto() }, (res) => {
     if (res.success) {
@@ -1187,19 +1272,64 @@ function enterRoom(roomId, rName, owner) {
   updateParticipantCount();
   renderParticipantsList();
 
-  // Conectar com todos os peers já na sala
   for (const [pid] of participants) {
-    if (pid !== myId) socket.emit('request-peer', { targetId: pid });
+    if (pid === myId) continue;
+    connectToPeer(pid);
+    socket.emit('request-peer', { targetId: pid });
   }
 
-  // BUG FIX: solicitar stream de quem já está transmitindo
-  // request-peer dispara offer → ontrack → tile aparece
-  // Mas se o broadcaster já adicionou tracks antes, precisamos garantir
-  // que ele vai re-enviar o offer com as tracks ao receber request-peer.
-  // O servidor já repassa request-peer → broadcaster chama initPeerConnection(isInitiator=true)
-  // que chama addLocalTracksToPeer → se tiver tracks, o offer vai com elas. ✓
-
   showToast(`Você entrou em ${rName || roomId}`, 'success');
+}
+
+function rejoinAfterReconnect() {
+  if (!currentRoomId || !socket) return;
+  for (const [, e] of peers) { if (e.pc) try { e.pc.close(); } catch (_) {} }
+  peers.clear();
+  pendingIce.clear();
+
+  socket.emit('join-room', {
+    roomId: currentRoomId,
+    password: lastJoinPassword,
+    userName: myName,
+    photoUrl: loadPhoto()
+  }, (res) => {
+    if (!res || !res.success) {
+      showToast('Não foi possível voltar à sala', 'error');
+      leaveRoom(false);
+      return;
+    }
+    isOwner = res.isOwner;
+    participants.clear();
+    (res.participants || []).forEach(p => participants.set(p.id, {
+      name: p.name, isOwner: p.isOwner,
+      isBroadcasting: p.isBroadcasting, broadcastType: p.broadcastType,
+      hasMic: p.hasMic, micMuted: p.micMuted,
+      photoUrl: p.photoUrl || ''
+    }));
+    updateParticipantCount();
+    renderParticipantsList();
+    for (const [pid] of participants) {
+      if (pid === myId) continue;
+      connectToPeer(pid);
+      socket.emit('request-peer', { targetId: pid });
+    }
+    const vt = getCurrentVideoTrack();
+    if (vt) broadcastVideoTrack(vt);
+    const at = getMicAudioTrack();
+    if (at) {
+      for (const [, entry] of peers) {
+        if (entry.pc) replaceAudioTrackInPeer(entry.pc, at);
+      }
+    }
+    if (isScreenSharing || isCameraOn) {
+      socket.emit('stream-started', {
+        type: isScreenSharing ? 'screen' : 'camera',
+        hasAudio: !!micStream
+      });
+    }
+    if (micStream) socket.emit('mic-update', { hasMic: true, micMuted: !isMicOn });
+    showToast('Reconectado à sala', 'success');
+  });
 }
 
 function leaveRoom(notify = true) {
@@ -1211,6 +1341,8 @@ function leaveRoom(notify = true) {
 
   isOwner = false; currentRoomId = null; roomName = '';
   isAudioMuted = false;
+  lastJoinPassword = '';
+  screenShareBusy = false;
 
   const grid = document.getElementById('streams-grid');
   grid.innerHTML = `<div id="no-stream" class="no-stream-placeholder">
@@ -1630,18 +1762,10 @@ window.addEventListener('beforeunload', () => {
 });
 
 // pagehide: fallback para mobile (iOS Safari não dispara beforeunload confiável)
-window.addEventListener('pagehide', () => {
+window.addEventListener('pagehide', (e) => {
+  if (e.persisted) return;
   if (currentRoomId && socket) {
     stopAllMedia();
-    socket.emit('leave-room');
-  }
-});
-
-// visibilitychange: detecta quando app vai para background no mobile
-document.addEventListener('visibilitychange', () => {
-  if (document.visibilityState === 'hidden' && currentRoomId && socket) {
-    // No mobile, quando o usuário sai do app a página fica "hidden"
-    // Apenas emite leave sem parar a mídia (pode ter voltado)
     socket.emit('leave-room');
   }
 });

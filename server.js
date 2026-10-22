@@ -31,8 +31,8 @@ const io = new Server(server, {
     },
     methods: ['GET', 'POST']
   },
-  // Limitar tamanho de payload para evitar DoS
-  maxHttpBufferSize: 1e5   // 100 KB
+  // SDP/ICE cabem com folga; fotos de perfil grandes são recusadas no cliente
+  maxHttpBufferSize: 5e5
 });
 
 // ==================== MIDDLEWARES DE SEGURANÇA ====================
@@ -42,11 +42,13 @@ app.use(helmet({
   contentSecurityPolicy: {
     directives: {
       defaultSrc:     ["'self'"],
-      scriptSrc:      ["'self'", "'unsafe-inline'", 'https://cdn.tailwindcss.com', 'https://max-cord.onrender.com'],
+      scriptSrc:      ["'self'", "'unsafe-inline'", 'https://cdn.tailwindcss.com', 'https://cdn.socket.io', 'https://max-cord.onrender.com'],
       styleSrc:       ["'self'", "'unsafe-inline'", 'https://cdn.tailwindcss.com'],
       connectSrc:     ["'self'", 'https://max-cord.onrender.com', 'wss://max-cord.onrender.com',
+                       'https://cdn.socket.io', 'wss://cdn.socket.io',
                        'https://stun.l.google.com', 'https://stun1.l.google.com',
-                       'https://stun2.l.google.com', 'https://stun3.l.google.com'],
+                       'https://stun2.l.google.com', 'https://stun3.l.google.com',
+                       'https://stun.cloudflare.com'],
       mediaSrc:       ["'self'", 'blob:', 'mediastream:'],
       imgSrc:         ["'self'", 'data:', 'blob:', 'https:'],
       frameSrc:       ["'none'"],
@@ -313,7 +315,9 @@ io.on('connection', (socket) => {
     const room = rooms.get(roomId);
     if (!room) return callback({ success: false, message: 'Sala não encontrada.' });
 
-    if (room.participants.size >= MAX_PARTICIPANTS) {
+    if (socket.roomId && socket.roomId !== roomId) handleLeave(socket);
+
+    if (room.participants.size >= MAX_PARTICIPANTS && !room.participants.has(socket.id)) {
       return callback({ success: false, message: 'Sala cheia.' });
     }
 
@@ -321,8 +325,14 @@ io.on('connection', (socket) => {
       return callback({ success: false, message: 'Senha incorreta.' });
     }
 
+    if (room.ownerName.toLowerCase() === userName.toLowerCase() && !room.participants.has(room.ownerId)) {
+      room.ownerId = socket.id;
+    }
+
+    const joiningAsOwner = room.ownerId === socket.id;
+
     room.participants.set(socket.id, {
-      name: userName, isOwner: false,
+      name: userName, isOwner: joiningAsOwner,
       isBroadcasting: false, broadcastType: null,
       hasMic: false, micMuted: true,
       photoUrl: photoUrl
@@ -343,9 +353,9 @@ io.on('connection', (socket) => {
       });
     }
 
-    socket.to(roomId).emit('user-joined', { id: socket.id, name: userName, isOwner: false, photoUrl });
+    socket.to(roomId).emit('user-joined', { id: socket.id, name: userName, isOwner: joiningAsOwner, photoUrl });
 
-    callback({ success: true, roomId, roomName: room.name, isOwner: room.ownerId === socket.id, participants });
+    callback({ success: true, roomId, roomName: room.name, isOwner: joiningAsOwner, participants });
     broadcastRoomList();
     console.log(`[Sala] ${userName} entrou em ${roomId}`);
   });
@@ -398,26 +408,37 @@ io.on('connection', (socket) => {
     });
   });
 
+  function sameRoomAs(targetId) {
+    const room = rooms.get(socket.roomId);
+    return !!(room && room.participants.has(socket.id) && room.participants.has(targetId));
+  }
+
   // ---------- Sinalização WebRTC ----------
   socket.on('request-peer', (data) => {
     const targetId = sanitizeStr((data || {}).targetId, 30);
-    if (targetId) socket.to(targetId).emit('request-peer', { fromId: socket.id });
+    if (targetId && sameRoomAs(targetId)) {
+      io.to(targetId).emit('request-peer', { fromId: socket.id });
+    }
   });
 
   socket.on('offer', (data) => {
     const targetId = sanitizeStr((data || {}).targetId, 30);
-    if (targetId && (data || {}).sdp) socket.to(targetId).emit('offer', { fromId: socket.id, sdp: data.sdp });
+    if (targetId && (data || {}).sdp && sameRoomAs(targetId)) {
+      io.to(targetId).emit('offer', { fromId: socket.id, sdp: data.sdp });
+    }
   });
 
   socket.on('answer', (data) => {
     const targetId = sanitizeStr((data || {}).targetId, 30);
-    if (targetId && (data || {}).sdp) socket.to(targetId).emit('answer', { fromId: socket.id, sdp: data.sdp });
+    if (targetId && (data || {}).sdp && sameRoomAs(targetId)) {
+      io.to(targetId).emit('answer', { fromId: socket.id, sdp: data.sdp });
+    }
   });
 
   socket.on('ice-candidate', (data) => {
     const targetId = sanitizeStr((data || {}).targetId, 30);
-    if (targetId && (data || {}).candidate) {
-      socket.to(targetId).emit('ice-candidate', { fromId: socket.id, candidate: data.candidate });
+    if (targetId && (data || {}).candidate && sameRoomAs(targetId)) {
+      io.to(targetId).emit('ice-candidate', { fromId: socket.id, candidate: data.candidate });
     }
   });
 
