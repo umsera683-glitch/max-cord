@@ -214,6 +214,9 @@ function setupSocketListeners() {
       renderParticipantsList();
     }
   });
+
+  // Atualização da lista de salas em tempo real (enviada pelo servidor)
+  socket.on('room-list-update', (data) => {
     // Só atualiza se o usuário estiver no lobby (não dentro de uma sala)
     if (!currentRoomId) {
       renderRoomsList(data.rooms);
