@@ -458,14 +458,39 @@ function upsertVideoTile(peerId, stream) {
     tile.dataset.peerId = peerId;
     tile.addEventListener('click', () => makeTileFullscreen(tile));
 
+    // ── Loader (visível enquanto o vídeo não tem frames) ──
+    const loader = document.createElement('div');
+    loader.className = 'tile-loader';
+    loader.innerHTML = `
+      <div class="tile-loader-spinner"></div>
+      <span class="tile-loader-text">Conectando...</span>`;
+    tile.appendChild(loader);
+
     const video = document.createElement('video');
     video.autoplay = true;
     video.playsInline = true;
     video.setAttribute('playsinline', '');
-    // Mutar sempre: próprio usuário (evita eco) ou conforme estado global
     video.muted = (peerId === myId) ? true : isAudioMuted;
     video.srcObject = stream;
+    video.style.opacity = '0';  // Esconde até ter frames
     tile.appendChild(video);
+
+    // Quando o primeiro frame chegar, esconde o loader e mostra o vídeo
+    video.addEventListener('loadeddata', function onLoaded() {
+      video.style.opacity = '1';
+      video.style.transition = 'opacity 0.4s ease';
+      loader.style.display = 'none';
+      video.removeEventListener('loadeddata', onLoaded);
+    });
+
+    // Fallback: se demorar mais de 15s ainda aguardando, mostrar mensagem
+    const timeout = setTimeout(() => {
+      if (video.style.opacity === '0') {
+        loader.querySelector('.tile-loader-text').textContent = 'Aguardando stream...';
+      }
+    }, 15000);
+
+    video.addEventListener('loadeddata', () => clearTimeout(timeout), { once: true });
 
     const label = document.createElement('div');
     label.className = 'stream-tile-label';
@@ -477,7 +502,19 @@ function upsertVideoTile(peerId, stream) {
     updateGridClass();
   } else {
     const video = tile.querySelector('video');
-    if (video && video.srcObject !== stream) video.srcObject = stream;
+    if (video && video.srcObject !== stream) {
+      video.srcObject = stream;
+      // Resetar opacity se stream foi trocado
+      if (video.style.opacity === '1') return; // já estava visível
+      video.style.opacity = '0';
+      const loader = tile.querySelector('.tile-loader');
+      if (loader) loader.style.display = '';
+      video.addEventListener('loadeddata', function onLoaded() {
+        video.style.opacity = '1';
+        if (loader) loader.style.display = 'none';
+        video.removeEventListener('loadeddata', onLoaded);
+      });
+    }
   }
 
   const p = participants.get(peerId);
