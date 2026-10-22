@@ -1,31 +1,117 @@
-const express = require('express');
-const http = require('http');
+const express    = require('express');
+const http       = require('http');
 const { Server } = require('socket.io');
-const cors = require('cors');
-const bcrypt = require('bcryptjs');
-const path = require('path');
+const cors       = require('cors');
+const bcrypt     = require('bcryptjs');
+const helmet     = require('helmet');
+const rateLimit  = require('express-rate-limit');
+const path       = require('path');
 require('dotenv').config();
 
-const app = express();
+const app    = express();
 const server = http.createServer(app);
-
-const io = new Server(server, {
-  cors: { origin: '*', methods: ['GET', 'POST'] }
-});
-
-app.use(cors());
-app.use(express.json());
-app.use(express.static(path.join(__dirname, 'public')));
 
 const PORT = process.env.PORT || 8080;
 
+// Origens permitidas (o próprio Render + localhost p/ dev)
+const ALLOWED_ORIGINS = [
+  'https://max-cord.onrender.com',
+  'https://max-cord.netlify.app',
+  'http://localhost:8080',
+  'http://127.0.0.1:8080'
+];
+
+// ==================== SOCKET.IO ====================
+const io = new Server(server, {
+  cors: {
+    origin: (origin, cb) => {
+      // Permite sem origin (apps mobile/desktop nativos) e origens conhecidas
+      if (!origin || ALLOWED_ORIGINS.includes(origin)) return cb(null, true);
+      cb(new Error('Origem não permitida: ' + origin));
+    },
+    methods: ['GET', 'POST']
+  },
+  // Limitar tamanho de payload para evitar DoS
+  maxHttpBufferSize: 1e5   // 100 KB
+});
+
+// ==================== MIDDLEWARES DE SEGURANÇA ====================
+
+// Helmet — headers HTTP de segurança
+app.use(helmet({
+  contentSecurityPolicy: {
+    directives: {
+      defaultSrc:     ["'self'"],
+      scriptSrc:      ["'self'", "'unsafe-inline'", 'https://cdn.tailwindcss.com', 'https://max-cord.onrender.com'],
+      styleSrc:       ["'self'", "'unsafe-inline'", 'https://cdn.tailwindcss.com'],
+      connectSrc:     ["'self'", 'https://max-cord.onrender.com', 'wss://max-cord.onrender.com',
+                       'https://stun.l.google.com', 'https://stun1.l.google.com',
+                       'https://stun2.l.google.com', 'https://stun3.l.google.com'],
+      mediaSrc:       ["'self'", 'blob:', 'mediastream:'],
+      imgSrc:         ["'self'", 'data:', 'blob:', 'https:'],
+      frameSrc:       ["'none'"],
+      objectSrc:      ["'none'"],
+      upgradeInsecureRequests: []
+    }
+  },
+  // Impede que o site seja colocado em iframe (clickjacking)
+  frameguard: { action: 'deny' },
+  // Esconde que usa Express
+  hidePoweredBy: true,
+  // HSTS — força HTTPS por 1 ano
+  hsts: { maxAge: 31536000, includeSubDomains: true }
+}));
+
+// CORS para rotas HTTP
+app.use(cors({
+  origin: (origin, cb) => {
+    if (!origin || ALLOWED_ORIGINS.includes(origin)) return cb(null, true);
+    cb(new Error('Origem não permitida'));
+  },
+  methods: ['GET']
+}));
+
+// Rate limiting global — máx 120 req/min por IP
+app.use(rateLimit({
+  windowMs: 60 * 1000,
+  max: 120,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { error: 'Muitas requisições. Tente novamente em 1 minuto.' }
+}));
+
+app.use(express.json({ limit: '10kb' }));
+app.use(express.static(path.join(__dirname, 'public')));
+
+// ==================== SANITIZAÇÃO ====================
+
+function sanitizeStr(val, maxLen) {
+  if (typeof val !== 'string') return '';
+  return val.trim().slice(0, maxLen || 100).replace(/[<>]/g, '');
+}
+
+function isValidRoomId(id) {
+  return typeof id === 'string' && /^[A-Z0-9]{2,12}$/.test(id);
+}
+
 // ==================== GESTÃO DE SALAS ====================
-// Salas são persistentes: não são deletadas quando o criador sai.
-// Só são deletadas via evento 'delete-room' pelo dono ou se ficar
-// 30 minutos sem nenhum participante (limpeza automática).
 
 const rooms = new Map();
-const EMPTY_ROOM_TTL = 30 * 60 * 1000; // 30 min
+const EMPTY_ROOM_TTL    = 30 * 60 * 1000; // 30 min vazia
+const MAX_ROOMS         = 200;
+const MAX_PARTICIPANTS  = 50;
+
+// Rate limit de eventos Socket.io por socket (criar/entrar sala)
+const socketEventCounts = new Map();
+function checkSocketRate(socketId, event, limit, windowMs) {
+  const key  = `${socketId}:${event}`;
+  const now  = Date.now();
+  const data = socketEventCounts.get(key) || { count: 0, resetAt: now + windowMs };
+  if (now > data.resetAt) { data.count = 0; data.resetAt = now + windowMs; }
+  data.count++;
+  socketEventCounts.set(key, data);
+  return data.count <= limit;
+}
 
 function generateRoomId() {
   const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
@@ -34,14 +120,18 @@ function generateRoomId() {
   return id;
 }
 
-// Limpeza de salas vazias há mais de 30 minutos
+// Limpeza periódica
 setInterval(() => {
   const now = Date.now();
   for (const [id, room] of rooms) {
     if (room.participants.size === 0 && (now - room.emptyAt) > EMPTY_ROOM_TTL) {
       rooms.delete(id);
-      console.log(`[Sala] ${id} expirou (vazia por 30min)`);
+      console.log(`[Sala] ${id} expirou`);
     }
+  }
+  // Limpar contadores de rate do socket
+  for (const [key, data] of socketEventCounts) {
+    if (Date.now() > data.resetAt + 60000) socketEventCounts.delete(key);
   }
 }, 5 * 60 * 1000);
 
@@ -54,121 +144,118 @@ function handleLeave(socket) {
   const room = rooms.get(roomId);
   if (!room) { socket.roomId = null; return; }
 
-  const participant = room.participants.get(socket.id);
+  const participant    = room.participants.get(socket.id);
   const wasBroadcasting = participant ? participant.isBroadcasting : false;
 
   room.participants.delete(socket.id);
   socket.leave(roomId);
 
-  // Notificar saída
   socket.to(roomId).emit('user-left', {
-    id: socket.id,
+    id:   socket.id,
     name: participant ? participant.name : 'Alguém'
   });
 
-  // Notificar que parou de transmitir
   if (wasBroadcasting) {
     socket.to(roomId).emit('stream-stopped', { id: socket.id });
   }
 
-  // Sala não é deletada — fica persistente
   if (room.participants.size === 0) {
     room.emptyAt = Date.now();
-    console.log(`[Sala] ${roomId} ficou vazia (persistente por 30min)`);
   }
 
   socket.roomId = null;
 }
 
-// ==================== SOCKET.IO ====================
+// ==================== SOCKET.IO EVENTS ====================
 
 io.on('connection', (socket) => {
-  console.log(`[+] Conectado: ${socket.id}`);
+  console.log(`[+] ${socket.id} (${socket.handshake.address})`);
 
-  // Listar salas públicas (sem senha)
+  // ---------- Listar salas ----------
   socket.on('list-rooms', (callback) => {
+    if (typeof callback !== 'function') return;
     const list = [];
     for (const [id, room] of rooms) {
       list.push({
         id,
-        name: room.name,
-        hasPassword: room.hasPassword,
+        name:             room.name,
+        hasPassword:      room.hasPassword,
         participantCount: room.participants.size,
-        ownerName: room.ownerName
+        ownerName:        room.ownerName
       });
     }
     callback({ rooms: list });
   });
 
-  // Verificar sala
-  socket.on('check-room', ({ roomId }, callback) => {
-    const room = rooms.get(roomId);
+  // ---------- Verificar sala ----------
+  socket.on('check-room', (data, callback) => {
+    if (typeof callback !== 'function') return;
+    const roomId = sanitizeStr((data || {}).roomId, 12).toUpperCase();
+    const room   = rooms.get(roomId);
     if (!room) return callback({ exists: false });
     callback({
-      exists: true,
-      name: room.name,
-      hasPassword: room.hasPassword,
+      exists:           true,
+      name:             room.name,
+      hasPassword:      room.hasPassword,
       participantCount: room.participants.size,
-      ownerName: room.ownerName
+      ownerName:        room.ownerName
     });
   });
 
-  // Redefinir senha — só o dono pode, provando identidade pelo nome
-  // O "token de dono" é: ownerName + roomId (sem senha, pois ela foi esquecida)
-  socket.on('reset-password', ({ roomId, ownerName, newPassword }, callback) => {
+  // ---------- Redefinir senha ----------
+  socket.on('reset-password', (data, callback) => {
+    if (typeof callback !== 'function') return;
+    const roomId      = sanitizeStr((data || {}).roomId, 12).toUpperCase();
+    const ownerName   = sanitizeStr((data || {}).ownerName, 20);
+    const newPassword = sanitizeStr((data || {}).newPassword, 60);
+
     const room = rooms.get(roomId);
+    if (!room) return callback({ success: false, message: 'Sala não encontrada.' });
 
-    if (!room) {
-      return callback({ success: false, message: 'Sala não encontrada.' });
-    }
-
-    // Validar que o solicitante é o dono pelo nome (case-insensitive)
-    const nameMatch = room.ownerName.trim().toLowerCase() === (ownerName || '').trim().toLowerCase();
+    const nameMatch = room.ownerName.toLowerCase() === ownerName.toLowerCase();
     if (!nameMatch) {
-      return callback({ success: false, message: 'Nome de dono incorreto. Apenas o criador da sala pode redefinir a senha.' });
+      return callback({ success: false, message: 'Nome de dono incorreto.' });
     }
 
-    // Atualizar a senha
-    if (newPassword && newPassword.trim()) {
-      room.password = bcrypt.hashSync(newPassword.trim(), 10);
-      room.hasPassword = true;
-    } else {
-      // Nova senha vazia = remover senha
-      room.password = null;
-      room.hasPassword = false;
-    }
-
-    console.log(`[Sala] ${roomId} senha redefinida por ${ownerName}`);
+    room.password    = newPassword ? bcrypt.hashSync(newPassword, 10) : null;
+    room.hasPassword = !!newPassword;
     callback({ success: true });
   });
 
-  // Criar sala
-  socket.on('create-room', ({ roomId, roomName, password, userName }, callback) => {
-    if (rooms.has(roomId)) {
-      return callback({ success: false, message: 'Já existe uma sala com este ID.' });
+  // ---------- Criar sala ----------
+  socket.on('create-room', (data, callback) => {
+    if (typeof callback !== 'function') return;
+    if (!checkSocketRate(socket.id, 'create-room', 5, 60000)) {
+      return callback({ success: false, message: 'Criando salas muito rápido. Aguarde.' });
+    }
+    if (rooms.size >= MAX_ROOMS) {
+      return callback({ success: false, message: 'Limite de salas atingido.' });
     }
 
-    const hashedPassword = password ? bcrypt.hashSync(password, 10) : null;
+    const roomId   = sanitizeStr((data || {}).roomId, 12).toUpperCase() || generateRoomId();
+    const roomName = sanitizeStr((data || {}).roomName, 50) || roomId;
+    const password = sanitizeStr((data || {}).password, 60);
+    const userName = sanitizeStr((data || {}).userName, 20);
+
+    if (!userName)           return callback({ success: false, message: 'Nome inválido.' });
+    if (!isValidRoomId(roomId)) return callback({ success: false, message: 'ID de sala inválido.' });
+    if (rooms.has(roomId))   return callback({ success: false, message: 'Já existe uma sala com este ID.' });
 
     const room = {
-      id: roomId,
-      name: roomName || roomId,
-      password: hashedPassword,
+      id:          roomId,
+      name:        roomName,
+      password:    password ? bcrypt.hashSync(password, 10) : null,
       hasPassword: !!password,
-      ownerId: socket.id,         // dono atual (pode mudar se ele sair)
-      ownerOriginalId: socket.id, // dono original (para identificação)
-      ownerName: userName,
+      ownerId:     socket.id,
+      ownerName:   userName,
       participants: new Map(),
-      emptyAt: null
+      emptyAt:     null
     };
 
     room.participants.set(socket.id, {
-      name: userName,
-      isOwner: true,
-      isBroadcasting: false,
-      broadcastType: null,
-      hasMic: false,
-      micMuted: true
+      name: userName, isOwner: true,
+      isBroadcasting: false, broadcastType: null,
+      hasMic: false, micMuted: true
     });
 
     rooms.set(roomId, room);
@@ -179,102 +266,82 @@ io.on('connection', (socket) => {
     console.log(`[Sala] ${roomId} criada por ${userName}`);
   });
 
-  // Entrar na sala
-  socket.on('join-room', ({ roomId, password, userName }, callback) => {
+  // ---------- Entrar na sala ----------
+  socket.on('join-room', (data, callback) => {
+    if (typeof callback !== 'function') return;
+    if (!checkSocketRate(socket.id, 'join-room', 10, 60000)) {
+      return callback({ success: false, message: 'Muitas tentativas. Aguarde.' });
+    }
+
+    const roomId   = sanitizeStr((data || {}).roomId, 12).toUpperCase();
+    const password = sanitizeStr((data || {}).password, 60);
+    const userName = sanitizeStr((data || {}).userName, 20);
+
+    if (!userName) return callback({ success: false, message: 'Nome inválido.' });
+
     const room = rooms.get(roomId);
     if (!room) return callback({ success: false, message: 'Sala não encontrada.' });
 
-    if (room.hasPassword) {
-      const valid = bcrypt.compareSync(password || '', room.password);
-      if (!valid) return callback({ success: false, message: 'Senha incorreta.' });
+    if (room.participants.size >= MAX_PARTICIPANTS) {
+      return callback({ success: false, message: 'Sala cheia.' });
+    }
+
+    if (room.hasPassword && !bcrypt.compareSync(password, room.password)) {
+      return callback({ success: false, message: 'Senha incorreta.' });
     }
 
     room.participants.set(socket.id, {
-      name: userName,
-      isOwner: false,
-      isBroadcasting: false,
-      broadcastType: null,
-      hasMic: false,
-      micMuted: true
+      name: userName, isOwner: false,
+      isBroadcasting: false, broadcastType: null,
+      hasMic: false, micMuted: true
     });
 
     socket.join(roomId);
     socket.roomId = roomId;
 
-    // Lista de participantes atual
     const participants = [];
     for (const [id, p] of room.participants) {
       participants.push({
-        id,
-        name: p.name,
-        isOwner: p.isOwner,
+        id, name: p.name, isOwner: p.isOwner,
         isBroadcasting: p.isBroadcasting,
-        broadcastType: p.broadcastType,
-        hasMic: p.hasMic,
-        micMuted: p.micMuted
+        broadcastType:  p.broadcastType,
+        hasMic:         p.hasMic,
+        micMuted:       p.micMuted
       });
     }
 
-    // Notificar outros
-    socket.to(roomId).emit('user-joined', {
-      id: socket.id,
-      name: userName,
-      isOwner: false
-    });
+    socket.to(roomId).emit('user-joined', { id: socket.id, name: userName, isOwner: false });
 
-    callback({
-      success: true,
-      roomId,
-      roomName: room.name,
-      isOwner: room.ownerId === socket.id,
-      participants
-    });
-
+    callback({ success: true, roomId, roomName: room.name, isOwner: room.ownerId === socket.id, participants });
     console.log(`[Sala] ${userName} entrou em ${roomId}`);
   });
 
-  // Deletar sala (só o dono pode)
+  // ---------- Deletar sala ----------
   socket.on('delete-room', (callback) => {
     const roomId = socket.roomId;
     if (!roomId) return callback && callback({ success: false });
-
     const room = rooms.get(roomId);
-    if (!room) return callback && callback({ success: false });
+    if (!room || room.ownerId !== socket.id) return callback && callback({ success: false, message: 'Sem permissão.' });
 
-    if (room.ownerId !== socket.id) {
-      return callback && callback({ success: false, message: 'Apenas o dono pode deletar a sala.' });
-    }
-
-    // Notificar todos e desconectar
     io.to(roomId).emit('room-deleted', { message: 'A sala foi deletada pelo dono.' });
-
-    // Remover todos os sockets da sala
     for (const [id] of room.participants) {
       const s = io.sockets.sockets.get(id);
       if (s) { s.leave(roomId); s.roomId = null; }
     }
-
     rooms.delete(roomId);
     socket.roomId = null;
-
     callback && callback({ success: true });
-    console.log(`[Sala] ${roomId} deletada por ${room.ownerName}`);
   });
 
-  // Atualizar estado de transmissão
-  socket.on('stream-started', ({ type, hasAudio }) => {
+  // ---------- Transmissão ----------
+  socket.on('stream-started', (data) => {
     const room = rooms.get(socket.roomId);
     if (!room) return;
-    const p = room.participants.get(socket.id);
-    if (p) {
-      p.isBroadcasting = true;
-      p.broadcastType = type;
-    }
+    const type = sanitizeStr((data || {}).type, 10);
+    const p    = room.participants.get(socket.id);
+    if (p) { p.isBroadcasting = true; p.broadcastType = type; }
     socket.to(socket.roomId).emit('stream-started', {
-      id: socket.id,
-      name: p ? p.name : '?',
-      type,
-      hasAudio: !!hasAudio
+      id: socket.id, name: p ? p.name : '?', type, hasAudio: !!(data || {}).hasAudio
     });
   });
 
@@ -286,48 +353,46 @@ io.on('connection', (socket) => {
     socket.to(socket.roomId).emit('stream-stopped', { id: socket.id });
   });
 
-  // Atualizar estado do microfone
-  socket.on('mic-update', ({ hasMic, micMuted }) => {
+  socket.on('mic-update', (data) => {
     const room = rooms.get(socket.roomId);
     if (!room) return;
     const p = room.participants.get(socket.id);
-    if (p) {
-      p.hasMic = hasMic;
-      p.micMuted = micMuted;
-    }
+    if (p) { p.hasMic = !!(data || {}).hasMic; p.micMuted = !!(data || {}).micMuted; }
     socket.to(socket.roomId).emit('mic-update', {
-      id: socket.id,
-      hasMic,
-      micMuted
+      id: socket.id, hasMic: p.hasMic, micMuted: p.micMuted
     });
   });
 
-  // ---- Sinalização WebRTC (todos com todos) ----
-
-  // Solicitar conexão com outro peer
-  socket.on('request-peer', ({ targetId }) => {
-    socket.to(targetId).emit('request-peer', { fromId: socket.id });
+  // ---------- Sinalização WebRTC ----------
+  socket.on('request-peer', (data) => {
+    const targetId = sanitizeStr((data || {}).targetId, 30);
+    if (targetId) socket.to(targetId).emit('request-peer', { fromId: socket.id });
   });
 
-  socket.on('offer', ({ targetId, sdp }) => {
-    socket.to(targetId).emit('offer', { fromId: socket.id, sdp });
+  socket.on('offer', (data) => {
+    const targetId = sanitizeStr((data || {}).targetId, 30);
+    if (targetId && (data || {}).sdp) socket.to(targetId).emit('offer', { fromId: socket.id, sdp: data.sdp });
   });
 
-  socket.on('answer', ({ targetId, sdp }) => {
-    socket.to(targetId).emit('answer', { fromId: socket.id, sdp });
+  socket.on('answer', (data) => {
+    const targetId = sanitizeStr((data || {}).targetId, 30);
+    if (targetId && (data || {}).sdp) socket.to(targetId).emit('answer', { fromId: socket.id, sdp: data.sdp });
   });
 
-  socket.on('ice-candidate', ({ targetId, candidate }) => {
-    socket.to(targetId).emit('ice-candidate', { fromId: socket.id, candidate });
+  socket.on('ice-candidate', (data) => {
+    const targetId = sanitizeStr((data || {}).targetId, 30);
+    if (targetId && (data || {}).candidate) {
+      socket.to(targetId).emit('ice-candidate', { fromId: socket.id, candidate: data.candidate });
+    }
   });
 
-  // Sair da sala manualmente
   socket.on('leave-room', () => handleLeave(socket));
 
-  // Desconexão
   socket.on('disconnect', () => {
     handleLeave(socket);
-    console.log(`[-] Desconectado: ${socket.id}`);
+    socketEventCounts.delete(`${socket.id}:create-room`);
+    socketEventCounts.delete(`${socket.id}:join-room`);
+    console.log(`[-] ${socket.id}`);
   });
 });
 
@@ -337,15 +402,22 @@ app.get('/health', (req, res) => {
   res.json({ status: 'online', rooms: rooms.size, uptime: Math.floor(process.uptime()) });
 });
 
+// Bloquear acesso a arquivos sensíveis
+app.get(['/server.js', '/.env', '/package.json', '/package-lock.json'], (req, res) => {
+  res.status(403).json({ error: 'Proibido' });
+});
+
 // ==================== INICIALIZAÇÃO ====================
 
 server.listen(PORT, () => {
   console.log('');
-  console.log('==================================');
-  console.log('       MaxCord - Servidor         ');
-  console.log('==================================');
-  console.log(`  Porta:  ${PORT}`);
-  console.log('  Auth:   Aberta (sem token)');
-  console.log('==================================');
+  console.log('================================');
+  console.log('     MaxCord - Servidor         ');
+  console.log('================================');
+  console.log(`  Porta:   ${PORT}`);
+  console.log(`  Salas:   max ${MAX_ROOMS}`);
+  console.log(`  Peers:   max ${MAX_PARTICIPANTS}/sala`);
+  console.log('  Segurança: helmet + rate limit');
+  console.log('================================');
   console.log('');
 });

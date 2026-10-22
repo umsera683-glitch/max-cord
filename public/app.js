@@ -94,6 +94,8 @@ function isMobile() {
 
 function saveName(n) { try { localStorage.setItem('sh_username', n); } catch (_) {} }
 function loadName()  { try { return localStorage.getItem('sh_username') || ''; } catch (_) { return ''; } }
+function savePhoto(url) { try { localStorage.setItem('sh_photo', url); } catch (_) {} }
+function loadPhoto()    { try { return localStorage.getItem('sh_photo') || ''; } catch (_) { return ''; } }
 
 // ==================== SOCKET ====================
 
@@ -612,11 +614,25 @@ function getMicAudioTrack() {
 
 // ==================== MÍDIA LOCAL ====================
 
-// FIX 6: startMic funciona standalone, sem câmera/tela
+// Constraints de microfone otimizadas para mobile e desktop
+function getMicConstraints() {
+  return {
+    audio: {
+      echoCancellation:   true,
+      noiseSuppression:   true,
+      autoGainControl:    true,
+      channelCount:       1,
+      sampleRate:         48000,
+      sampleSize:         16
+    },
+    video: false
+  };
+}
+
 async function startMic() {
   if (micStream) return true;
   try {
-    micStream = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
+    micStream = await navigator.mediaDevices.getUserMedia(getMicConstraints());
     isMicOn = true;
     socket.emit('mic-update', { hasMic: true, micMuted: false });
 
@@ -626,9 +642,21 @@ async function startMic() {
     }
     return true;
   } catch (err) {
-    console.error('Mic error:', err);
-    showToast('Não foi possível acessar o microfone', 'error');
-    return false;
+    // Fallback sem constraints avançadas (alguns Android mais antigos)
+    try {
+      micStream = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
+      isMicOn = true;
+      socket.emit('mic-update', { hasMic: true, micMuted: false });
+      const track = micStream.getAudioTracks()[0];
+      for (const [, entry] of peers) {
+        if (entry.pc) replaceAudioTrackInPeer(entry.pc, track);
+      }
+      return true;
+    } catch (err2) {
+      console.error('Mic error:', err2);
+      showToast('Não foi possível acessar o microfone', 'error');
+      return false;
+    }
   }
 }
 
@@ -660,14 +688,41 @@ async function toggleMic() {
 
 async function startCamera() {
   try {
+    // Mobile: câmera frontal com resolução adaptada
+    // Desktop: câmera HD padrão
     const constraints = isMobile()
-      ? { video: { facingMode: 'user', width: { ideal: 640 }, height: { ideal: 480 } }, audio: false }
-      : { video: { width: { ideal: 1280 }, height: { ideal: 720 } }, audio: false };
+      ? {
+          video: {
+            facingMode:  'user',
+            width:       { ideal: 640 },
+            height:      { ideal: 480 },
+            frameRate:   { ideal: 24 }
+          },
+          audio: false
+        }
+      : {
+          video: {
+            width:     { ideal: 1280 },
+            height:    { ideal: 720 },
+            frameRate: { ideal: 30 }
+          },
+          audio: false
+        };
 
     cameraStream = await navigator.mediaDevices.getUserMedia(constraints);
     isCameraOn = true;
 
+    // Garantir mic ativo e enviado para todos os peers
     if (!micStream) await startMic();
+    else {
+      // Mic já existia — garantir que está sendo enviado para peers existentes
+      const micTrack = getMicAudioTrack();
+      if (micTrack) {
+        for (const [, entry] of peers) {
+          if (entry.pc) replaceAudioTrackInPeer(entry.pc, micTrack);
+        }
+      }
+    }
 
     const track = getCurrentVideoTrack();
     if (track) broadcastVideoTrack(track);
@@ -679,7 +734,13 @@ async function startCamera() {
   } catch (err) {
     isCameraOn = false;
     console.error('Camera error:', err);
-    showToast('Não foi possível acessar a câmera', 'error');
+    if (err.name === 'NotAllowedError') {
+      showToast('Permissão negada para câmera', 'error');
+    } else if (err.name === 'NotFoundError') {
+      showToast('Câmera não encontrada neste dispositivo', 'error');
+    } else {
+      showToast('Não foi possível acessar a câmera', 'error');
+    }
   }
 }
 
@@ -708,45 +769,100 @@ async function startScreenShare() {
     return;
   }
   try {
-    screenStream = await navigator.mediaDevices.getDisplayMedia({ video: { cursor: 'always' }, audio: true });
+    // Pede áudio do sistema junto com a tela (funciona no Chrome/Edge desktop)
+    screenStream = await navigator.mediaDevices.getDisplayMedia({
+      video: { cursor: 'always', frameRate: { ideal: 30 } },
+      audio: {
+        echoCancellation: false,
+        noiseSuppression: false,
+        autoGainControl:  false
+      }
+    });
     isScreenSharing = true;
 
     const screenAudioTrack = screenStream.getAudioTracks()[0] || null;
+
+    // Garantir microfone ativo
     if (!micStream) await startMic();
 
-    // FIX 1: cancelar onended ANTES de parar — registrar após para evitar double-call
+    // FIX 1: cancelar onended antes de parar para evitar double-call
     screenStream.getVideoTracks()[0].onended = () => {
-      // Só executa se ainda estiver compartilhando (evita chamada dupla)
       if (isScreenSharing) stopScreenShare();
     };
 
     const videoTrack = getCurrentVideoTrack();
     broadcastVideoTrack(videoTrack);
-    socket.emit('stream-started', { type: 'screen', hasAudio: !!(screenAudioTrack || micStream) });
 
-    if (screenAudioTrack) {
+    // ---- ÁUDIO: mesclar áudio do sistema + microfone ----
+    let audioTrackToSend = getMicAudioTrack();
+
+    if (screenAudioTrack && audioTrackToSend) {
+      // Mesclar áudio do sistema com microfone via AudioContext
+      audioTrackToSend = await mergeAudioTracks(screenAudioTrack, audioTrackToSend);
+    } else if (screenAudioTrack) {
+      // Só áudio do sistema (sem mic)
+      audioTrackToSend = screenAudioTrack;
+    }
+    // Se só mic e sem áudio do sistema, audioTrackToSend já é o mic
+
+    if (audioTrackToSend) {
       for (const [, entry] of peers) {
-        if (entry.pc) replaceAudioTrackInPeer(entry.pc, screenAudioTrack);
+        if (entry.pc) replaceAudioTrackInPeer(entry.pc, audioTrackToSend);
       }
     }
 
+    socket.emit('stream-started', { type: 'screen', hasAudio: !!audioTrackToSend });
     updateSelfPreview();
     updateToolbarUI();
     showToast('Compartilhamento de tela iniciado', 'success');
   } catch (err) {
     isScreenSharing = false;
     console.error('Screen share error:', err);
-    showToast('Não foi possível compartilhar a tela', 'error');
+    if (err.name === 'NotAllowedError') {
+      showToast('Permissão negada para compartilhar a tela', 'error');
+    } else {
+      showToast('Não foi possível compartilhar a tela', 'error');
+    }
+  }
+}
+
+// Mescla dois AudioTracks em um único usando AudioContext
+async function mergeAudioTracks(track1, track2) {
+  try {
+    const ctx   = new (window.AudioContext || window.webkitAudioContext)();
+    const dest  = ctx.createMediaStreamDestination();
+
+    const src1  = ctx.createMediaStreamSource(new MediaStream([track1]));
+    const src2  = ctx.createMediaStreamSource(new MediaStream([track2]));
+
+    // Gain para controlar volume relativo
+    const gain1 = ctx.createGain(); gain1.gain.value = 1.0;  // sistema
+    const gain2 = ctx.createGain(); gain2.gain.value = 0.8;  // mic (levemente mais baixo)
+
+    src1.connect(gain1); gain1.connect(dest);
+    src2.connect(gain2); gain2.connect(dest);
+
+    // Guardar contexto para fechar ao parar
+    window._mergeAudioCtx = ctx;
+
+    return dest.stream.getAudioTracks()[0];
+  } catch (err) {
+    console.warn('mergeAudioTracks falhou, usando só mic:', err);
+    return track2; // fallback para só o mic
   }
 }
 
 // FIX 1: stopScreenShare sem double-call
 async function stopScreenShare() {
-  // Marcar false IMEDIATAMENTE para evitar re-entrada via onended
   isScreenSharing = false;
 
+  // Fechar AudioContext de mesclagem se existia
+  if (window._mergeAudioCtx) {
+    try { window._mergeAudioCtx.close(); } catch (_) {}
+    window._mergeAudioCtx = null;
+  }
+
   if (screenStream) {
-    // Cancelar handler antes de parar para não disparar de novo
     screenStream.getVideoTracks().forEach(t => { t.onended = null; t.stop(); });
     screenStream.getAudioTracks().forEach(t => t.stop());
     screenStream = null;
@@ -757,6 +873,13 @@ async function stopScreenShare() {
   if (isCameraOn && cameraStream) {
     const track = cameraStream.getVideoTracks()[0];
     replaceVideoInAllPeers(track);
+    // Restaurar mic como fonte de áudio
+    const micTrack = getMicAudioTrack();
+    if (micTrack) {
+      for (const [, entry] of peers) {
+        if (entry.pc) replaceAudioTrackInPeer(entry.pc, micTrack);
+      }
+    }
     socket.emit('stream-started', { type: 'camera', hasAudio: !!micStream });
   } else {
     clearVideoInAllPeers();
@@ -866,6 +989,11 @@ function updateSelfPreview() {
 }
 
 function stopAllMedia() {
+  // Fechar AudioContext de mesclagem se existia
+  if (window._mergeAudioCtx) {
+    try { window._mergeAudioCtx.close(); } catch (_) {}
+    window._mergeAudioCtx = null;
+  }
   stopComposite();
   if (screenStream) { screenStream.getVideoTracks().forEach(t => { t.onended = null; t.stop(); }); screenStream.getAudioTracks().forEach(t => t.stop()); screenStream = null; }
   if (cameraStream) { cameraStream.getTracks().forEach(t => t.stop()); cameraStream = null; }
@@ -876,8 +1004,10 @@ function stopAllMedia() {
 // ==================== GESTÃO DE SALAS ====================
 
 function validateName() {
-  const n = document.getElementById('global-username').value.trim();
-  if (!n) { showToast('Digite seu apelido antes de continuar', 'error'); return null; }
+  // Tentar usar nome salvo no perfil ou o que estiver no input
+  const fromInput = document.getElementById('global-username');
+  const n = (fromInput ? fromInput.value.trim() : '') || loadName();
+  if (!n) { showToast('Digite seu apelido antes de continuar', 'error'); enterEditMode(); return null; }
   return n;
 }
 
@@ -1155,12 +1285,92 @@ function checkShowForgotButton() {
   });
 }
 
-// ==================== AVATAR ====================
+// ==================== PERFIL ====================
+
+function applyAvatarTo(el, name, photoUrl) {
+  if (photoUrl) {
+    const safeInit = nameInitial(name);
+    const safeColor = nameColor(name);
+    el.innerHTML = `<img src="${photoUrl}" alt="${safeInit}" style="width:100%;height:100%;object-fit:cover;border-radius:50%;display:block" onerror="this.parentElement.textContent='${safeInit}';this.parentElement.style.background='linear-gradient(135deg,${safeColor},${safeColor}88)'">`;
+    el.style.background = 'transparent';
+    el.style.padding = '0';
+  } else {
+    el.innerHTML = nameInitial(name);
+    el.style.background = `linear-gradient(135deg, ${nameColor(name)}, ${nameColor(name)}88)`;
+    el.style.padding = '';
+  }
+}
 
 function updateAvatarPreview() {
-  const av = document.getElementById('avatar-preview');
-  av.textContent = nameInitial(name);
-  av.style.background = `linear-gradient(135deg, ${nameColor(name)}, ${nameColor(name)}88)`;
+  const name     = (document.getElementById('global-username') || {}).value || '';
+  const photoUrl = (document.getElementById('profile-photo-url') || {}).value || '';
+  const av       = document.getElementById('avatar-preview');
+  if (av) applyAvatarTo(av, name.trim() || '?', photoUrl.trim());
+}
+
+function showProfileView() {
+  const name  = loadName();
+  const photo = loadPhoto();
+  const viewEl = document.getElementById('profile-view');
+  const editEl = document.getElementById('profile-edit');
+  if (!viewEl || !editEl) return;
+
+  if (name) {
+    document.getElementById('profile-name-display').textContent = name;
+    const dispAv = document.getElementById('profile-avatar-display');
+    if (dispAv) applyAvatarTo(dispAv, name, photo);
+    viewEl.classList.remove('hidden');
+    editEl.classList.add('hidden');
+  } else {
+    viewEl.classList.add('hidden');
+    editEl.classList.remove('hidden');
+    updateAvatarPreview();
+  }
+}
+
+function enterEditMode() {
+  const name  = loadName();
+  const photo = loadPhoto();
+  const usernameEl = document.getElementById('global-username');
+  const photoEl    = document.getElementById('profile-photo-url');
+  if (usernameEl) usernameEl.value = name;
+  if (photoEl)    photoEl.value    = photo;
+  document.getElementById('profile-view').classList.add('hidden');
+  document.getElementById('profile-edit').classList.remove('hidden');
+  updateAvatarPreview();
+  setTimeout(() => usernameEl && usernameEl.focus(), 50);
+}
+
+function saveProfile() {
+  const nameEl  = document.getElementById('global-username');
+  const photoEl = document.getElementById('profile-photo-url');
+  const name    = nameEl ? nameEl.value.trim() : '';
+  const photo   = photoEl ? photoEl.value.trim() : '';
+
+  if (!name) {
+    showToast('Digite seu apelido', 'error');
+    if (nameEl) nameEl.focus();
+    return;
+  }
+  saveName(name);
+  savePhoto(photo);
+  showProfileView();
+  showToast('Perfil salvo!', 'success');
+}
+
+function handlePhotoUpload(file) {
+  if (!file) return;
+  if (file.size > 3 * 1024 * 1024) {
+    showToast('Arquivo muito grande. Use até 3MB ou cole uma URL.', 'error');
+    return;
+  }
+  const reader = new FileReader();
+  reader.onload = (e) => {
+    const photoEl = document.getElementById('profile-photo-url');
+    if (photoEl) photoEl.value = e.target.result;
+    updateAvatarPreview();
+  };
+  reader.readAsDataURL(file);
 }
 
 // ==================== EVENT LISTENERS ====================
@@ -1169,7 +1379,43 @@ document.getElementById('global-username').addEventListener('input', updateAvata
 document.getElementById('generate-room-id').addEventListener('click', () => {
   document.getElementById('create-room-id').value = generateRoomId();
 });
-document.getElementById('btn-create-room').addEventListener('click', createRoom);
+
+// Perfil
+document.getElementById('btn-edit-profile').addEventListener('click', enterEditMode);
+document.getElementById('btn-save-profile').addEventListener('click', saveProfile);
+document.getElementById('global-username').addEventListener('keypress', e => {
+  if (e.key === 'Enter') document.getElementById('profile-photo-url').focus();
+});
+document.getElementById('profile-photo-url').addEventListener('input', updateAvatarPreview);
+document.getElementById('profile-photo-url').addEventListener('keypress', e => {
+  if (e.key === 'Enter') saveProfile();
+});
+
+// Upload de arquivo
+document.getElementById('btn-upload-photo').addEventListener('click', () => {
+  document.getElementById('profile-photo-file').click();
+});
+document.getElementById('profile-photo-file').addEventListener('change', e => {
+  handlePhotoUpload(e.target.files[0]);
+});
+
+// Drag and drop de imagem no avatar
+document.getElementById('profile-edit-avatar-wrap').addEventListener('click', () => {
+  document.getElementById('profile-photo-file').click();
+});
+document.getElementById('profile-edit-avatar-wrap').addEventListener('dragover', e => {
+  e.preventDefault();
+  e.currentTarget.style.opacity = '0.7';
+});
+document.getElementById('profile-edit-avatar-wrap').addEventListener('dragleave', e => {
+  e.currentTarget.style.opacity = '1';
+});
+document.getElementById('profile-edit-avatar-wrap').addEventListener('drop', e => {
+  e.preventDefault();
+  e.currentTarget.style.opacity = '1';
+  const file = e.dataTransfer.files[0];
+  if (file && file.type.startsWith('image/')) handlePhotoUpload(file);
+});document.getElementById('btn-create-room').addEventListener('click', createRoom);
 document.getElementById('btn-join-room').addEventListener('click', () => joinRoom());
 
 document.getElementById('btn-refresh-rooms').addEventListener('click', loadRoomsList);
@@ -1200,6 +1446,18 @@ document.getElementById('btn-delete-room').addEventListener('click', deleteRoom)
 document.getElementById('btn-toggle-participants').addEventListener('click', () => {
   document.getElementById('participants-panel').classList.toggle('hidden');
 });
+
+// Fechar painel pelo botão X interno
+const btnClosePanel = document.getElementById('btn-close-participants');
+if (btnClosePanel) {
+  btnClosePanel.addEventListener('click', () => {
+    document.getElementById('participants-panel').classList.add('hidden');
+  });
+}
+
+// Botão X do modal de senha
+const btnForgotCancelX = document.getElementById('btn-forgot-cancel-x');
+if (btnForgotCancelX) btnForgotCancelX.addEventListener('click', closeForgotModal);
 
 // Prevenir double-tap zoom no mobile
 let lastTap = 0;
@@ -1237,6 +1495,10 @@ document.addEventListener('visibilitychange', () => {
 
 (function init() {
   const saved = loadName();
-  if (saved) { document.getElementById('global-username').value = saved; updateAvatarPreview(); }
+  if (saved) {
+    const el = document.getElementById('global-username');
+    if (el) el.value = saved;
+  }
+  showProfileView();
   connectSocket().then(() => fetchRooms());
 })();
