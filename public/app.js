@@ -58,17 +58,16 @@ let compRAF = null;
 
 const ICE_CONFIG = {
   iceServers: [
-    // STUN Google
+    // STUN Google — rápidos para descoberta de IP público
     { urls: 'stun:stun.l.google.com:19302' },
     { urls: 'stun:stun1.l.google.com:19302' },
     { urls: 'stun:stun2.l.google.com:19302' },
-    { urls: 'stun:stun3.l.google.com:19302' },
-    { urls: 'stun:stun4.l.google.com:19302' },
-
+    // STUN Cloudflare — muito rápido
+    { urls: 'stun:stun.cloudflare.com:3478' },
     // STUN Open Relay
     { urls: 'stun:openrelay.metered.ca:80' },
 
-    // TURN Open Relay — funciona mesmo em 4G e NAT restrito
+    // TURN Open Relay — usado como FALLBACK quando conexão direta falha
     {
       urls: 'turn:openrelay.metered.ca:80',
       username: 'openrelayproject',
@@ -90,8 +89,10 @@ const ICE_CONFIG = {
       credential: 'openrelayproject'
     }
   ],
-  iceCandidatePoolSize: 10,
-  iceTransportPolicy: 'relay'   // Força TURN — funciona em qualquer rede/4G/NAT
+  iceCandidatePoolSize: 20,     // Pré-coleta mais candidatos para conectar mais rápido
+  iceTransportPolicy: 'all',    // Tenta conexão direta primeiro (mais rápido), TURN como fallback
+  bundlePolicy: 'max-bundle',   // Agrupa mídia numa única conexão
+  rtcpMuxPolicy: 'require'      // Economiza portas, conecta mais rápido
 };
 
 // ==================== UTILITÁRIOS ====================
@@ -141,7 +142,10 @@ function connectSocket() {
 
     socket = io(window.SOCKET_URL || location.origin, {
       transports: ['websocket', 'polling'],
-      reconnectionAttempts: 5
+      reconnectionAttempts: 5,
+      reconnectionDelay: 1000,
+      reconnectionDelayMax: 3000,
+      timeout: 5000          // Reduzido de 10s para 5s
     });
 
     socket.on('connect', () => { myId = socket.id; setupSocketListeners(); resolve(true); });
@@ -151,7 +155,7 @@ function connectSocket() {
     });
     socket.on('disconnect', () => showToast('Conexão perdida. Reconectando...', 'error'));
     socket.on('reconnect', () => { myId = socket.id; showToast('Reconectado!', 'success'); });
-    setTimeout(() => { if (!socket.connected) resolve(false); }, 10000);
+    setTimeout(() => { if (!socket.connected) resolve(false); }, 6000); // Reduzido de 10s
   });
 }
 
@@ -297,7 +301,7 @@ function initPeerConnection(peerId, isInitiator) {
       } catch (err) {
         console.error('initPeer offer:', err);
       }
-    }, 200);
+    }, 100); // Reduzido de 200ms para 100ms
   }
 
   return pc;
@@ -1150,7 +1154,14 @@ async function joinRoom(roomId, password) {
       }));
       enterRoom(res.roomId, res.roomName, res.isOwner);
     } else {
-      showToast(res.message, 'error');
+      // Mensagem mais clara para "Sala não encontrada"
+      // (pode acontecer se o servidor reiniciou e perdeu as salas da memória)
+      if (res.message && res.message.toLowerCase().includes('não encontrada')) {
+        showToast('Sala não encontrada. O criador precisa recriar a sala.', 'error');
+        loadRoomsList(); // Atualizar lista para mostrar salas atuais
+      } else {
+        showToast(res.message, 'error');
+      }
       // Se falhou por senha incorreta, mostrar botão de recuperação
       if (res.message && res.message.toLowerCase().includes('senha')) {
         document.getElementById('btn-forgot-password').classList.remove('hidden');
