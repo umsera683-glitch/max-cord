@@ -123,17 +123,43 @@ function generateRoomId() {
 // Limpeza periódica
 setInterval(() => {
   const now = Date.now();
+  let changed = false;
   for (const [id, room] of rooms) {
     if (room.participants.size === 0 && (now - room.emptyAt) > EMPTY_ROOM_TTL) {
       rooms.delete(id);
+      changed = true;
       console.log(`[Sala] ${id} expirou`);
     }
   }
+  if (changed) broadcastRoomList();
   // Limpar contadores de rate do socket
   for (const [key, data] of socketEventCounts) {
     if (Date.now() > data.resetAt + 60000) socketEventCounts.delete(key);
   }
 }, 5 * 60 * 1000);
+
+// ==================== BROADCAST DE SALAS (tempo real) ====================
+
+// Emite lista atualizada para TODOS os clientes conectados
+// Throttle de 300ms para evitar spam quando muitos eventos acontecem juntos
+let _broadcastTimer = null;
+function broadcastRoomList() {
+  if (_broadcastTimer) return;
+  _broadcastTimer = setTimeout(() => {
+    _broadcastTimer = null;
+    const list = [];
+    for (const [id, room] of rooms) {
+      list.push({
+        id,
+        name:             room.name,
+        hasPassword:      room.hasPassword,
+        participantCount: room.participants.size,
+        ownerName:        room.ownerName
+      });
+    }
+    io.emit('room-list-update', { rooms: list });
+  }, 300);
+}
 
 // ==================== LÓGICA DE DESCONEXÃO ====================
 
@@ -164,6 +190,7 @@ function handleLeave(socket) {
   }
 
   socket.roomId = null;
+  broadcastRoomList();
 }
 
 // ==================== SOCKET.IO EVENTS ====================
@@ -236,6 +263,7 @@ io.on('connection', (socket) => {
     const roomName = sanitizeStr((data || {}).roomName, 50) || roomId;
     const password = sanitizeStr((data || {}).password, 60);
     const userName = sanitizeStr((data || {}).userName, 20);
+    const photoUrl = sanitizeStr((data || {}).photoUrl || '', 500);
 
     if (!userName)           return callback({ success: false, message: 'Nome inválido.' });
     if (!isValidRoomId(roomId)) return callback({ success: false, message: 'ID de sala inválido.' });
@@ -255,7 +283,8 @@ io.on('connection', (socket) => {
     room.participants.set(socket.id, {
       name: userName, isOwner: true,
       isBroadcasting: false, broadcastType: null,
-      hasMic: false, micMuted: true
+      hasMic: false, micMuted: true,
+      photoUrl: photoUrl
     });
 
     rooms.set(roomId, room);
@@ -263,6 +292,7 @@ io.on('connection', (socket) => {
     socket.roomId = roomId;
 
     callback({ success: true, roomId, isOwner: true });
+    broadcastRoomList();
     console.log(`[Sala] ${roomId} criada por ${userName}`);
   });
 
@@ -276,6 +306,7 @@ io.on('connection', (socket) => {
     const roomId   = sanitizeStr((data || {}).roomId, 12).toUpperCase();
     const password = sanitizeStr((data || {}).password, 60);
     const userName = sanitizeStr((data || {}).userName, 20);
+    const photoUrl = sanitizeStr((data || {}).photoUrl || '', 500);
 
     if (!userName) return callback({ success: false, message: 'Nome inválido.' });
 
@@ -293,7 +324,8 @@ io.on('connection', (socket) => {
     room.participants.set(socket.id, {
       name: userName, isOwner: false,
       isBroadcasting: false, broadcastType: null,
-      hasMic: false, micMuted: true
+      hasMic: false, micMuted: true,
+      photoUrl: photoUrl
     });
 
     socket.join(roomId);
@@ -306,13 +338,15 @@ io.on('connection', (socket) => {
         isBroadcasting: p.isBroadcasting,
         broadcastType:  p.broadcastType,
         hasMic:         p.hasMic,
-        micMuted:       p.micMuted
+        micMuted:       p.micMuted,
+        photoUrl:       p.photoUrl || ''
       });
     }
 
-    socket.to(roomId).emit('user-joined', { id: socket.id, name: userName, isOwner: false });
+    socket.to(roomId).emit('user-joined', { id: socket.id, name: userName, isOwner: false, photoUrl });
 
     callback({ success: true, roomId, roomName: room.name, isOwner: room.ownerId === socket.id, participants });
+    broadcastRoomList();
     console.log(`[Sala] ${userName} entrou em ${roomId}`);
   });
 
@@ -331,6 +365,7 @@ io.on('connection', (socket) => {
     rooms.delete(roomId);
     socket.roomId = null;
     callback && callback({ success: true });
+    broadcastRoomList();
   });
 
   // ---------- Transmissão ----------

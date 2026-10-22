@@ -91,7 +91,7 @@ const ICE_CONFIG = {
     }
   ],
   iceCandidatePoolSize: 10,
-  iceTransportPolicy: 'all'
+  iceTransportPolicy: 'relay'   // Força TURN — funciona em qualquer rede/4G/NAT
 };
 
 // ==================== UTILITÁRIOS ====================
@@ -162,7 +162,8 @@ function setupSocketListeners() {
   socket.on('user-joined', (data) => {
     participants.set(data.id, {
       name: data.name, isOwner: data.isOwner,
-      isBroadcasting: false, broadcastType: null, hasMic: false, micMuted: true
+      isBroadcasting: false, broadcastType: null, hasMic: false, micMuted: true,
+      photoUrl: data.photoUrl || ''
     });
     updateParticipantCount();
     renderParticipantsList();
@@ -203,6 +204,14 @@ function setupSocketListeners() {
   socket.on('room-deleted', (data) => {
     showToast(data.message, 'error');
     setTimeout(() => leaveRoom(false), 1500);
+  });
+
+  // Atualização da lista de salas em tempo real (enviada pelo servidor)
+  socket.on('room-list-update', (data) => {
+    // Só atualiza se o usuário estiver no lobby (não dentro de uma sala)
+    if (!currentRoomId) {
+      renderRoomsList(data.rooms);
+    }
   });
 
   // FIX 2a: quem recebe request-peer também faz offer (isInitiator=true)
@@ -939,7 +948,7 @@ function toggleAudio() {
 
 // ==================== HELPERS DE BROADCAST ====================
 
-// FIX 4: broadcastVideoTrack com renegociação via onnegotiationneeded
+// FIX 4: broadcastVideoTrack com offer explícito para garantir que peers vejam a transmissão
 function broadcastVideoTrack(videoTrack) {
   if (!videoTrack) return;
   const audioTrack = getMicAudioTrack();
@@ -948,12 +957,23 @@ function broadcastVideoTrack(videoTrack) {
     if (!entry.pc) continue;
     const vs = entry.pc.getSenders().find(s => s.track && s.track.kind === 'video');
     if (vs) {
+      // Já tem sender — trocar track sem renegociar
       vs.replaceTrack(videoTrack).catch(err => console.error('broadcast replaceTrack:', err));
     } else {
+      // Sem sender — adicionar e forçar offer explícito
       const ls = new MediaStream([videoTrack]);
       if (audioTrack) ls.addTrack(audioTrack);
       entry.pc.addTrack(videoTrack, ls);
-      // onnegotiationneeded disparará automaticamente
+
+      // Forçar offer manual (não depender só do onnegotiationneeded)
+      ;(async (pid, pc) => {
+        await new Promise(r => setTimeout(r, 150));
+        try {
+          const offer = await pc.createOffer();
+          await pc.setLocalDescription(offer);
+          socket.emit('offer', { targetId: pid, sdp: offer });
+        } catch (e) { console.error('broadcastVideoTrack offer:', e); }
+      })(peerId, entry.pc);
     }
   }
 }
@@ -1062,7 +1082,7 @@ async function createRoom() {
   if (!(await connectSocket())) return;
   myName = name; saveName(name);
 
-  socket.emit('create-room', { roomId, roomName: rName, password, userName: name }, (res) => {
+  socket.emit('create-room', { roomId, roomName: rName, password, userName: name, photoUrl: loadPhoto() }, (res) => {
     if (res.success) { isOwner = true; enterRoom(res.roomId, rName, true); }
     else showToast(res.message, 'error');
   });
@@ -1077,11 +1097,16 @@ async function joinRoom(roomId, password) {
   if (!(await connectSocket())) return;
   myName = name; saveName(name);
 
-  socket.emit('join-room', { roomId, password, userName: name }, (res) => {
+  socket.emit('join-room', { roomId, password, userName: name, photoUrl: loadPhoto() }, (res) => {
     if (res.success) {
       isOwner = res.isOwner;
       participants.clear();
-      res.participants.forEach(p => participants.set(p.id, p));
+      res.participants.forEach(p => participants.set(p.id, {
+        name: p.name, isOwner: p.isOwner,
+        isBroadcasting: p.isBroadcasting, broadcastType: p.broadcastType,
+        hasMic: p.hasMic, micMuted: p.micMuted,
+        photoUrl: p.photoUrl || ''
+      }));
       enterRoom(res.roomId, res.roomName, res.isOwner);
     } else {
       showToast(res.message, 'error');
@@ -1110,10 +1135,17 @@ function enterRoom(roomId, rName, owner) {
   updateParticipantCount();
   renderParticipantsList();
 
-  // Solicitar conexão com todos os peers já na sala
+  // Conectar com todos os peers já na sala
   for (const [pid] of participants) {
     if (pid !== myId) socket.emit('request-peer', { targetId: pid });
   }
+
+  // BUG FIX: solicitar stream de quem já está transmitindo
+  // request-peer dispara offer → ontrack → tile aparece
+  // Mas se o broadcaster já adicionou tracks antes, precisamos garantir
+  // que ele vai re-enviar o offer com as tracks ao receber request-peer.
+  // O servidor já repassa request-peer → broadcaster chama initPeerConnection(isInitiator=true)
+  // que chama addLocalTracksToPeer → se tiver tracks, o offer vai com elas. ✓
 
   showToast(`Você entrou em ${rName || roomId}`, 'success');
 }
@@ -1167,17 +1199,27 @@ function renderParticipantsList() {
   const list = document.getElementById('participants-list');
   list.innerHTML = '';
 
-  const renderItem = (id, name, owner, broadcasting, broadType, hasMic, micMuted, isMe) => {
+  const renderItem = (id, name, owner, broadcasting, broadType, hasMic, micMuted, isMe, photoUrl) => {
     const col = nameColor(name);
     const micIcon = hasMic ? (micMuted ? '🔇' : '🎙️') : '';
     const vidIcon = broadcasting ? (broadType === 'screen' ? '🖥️' : '📹') : '';
     const div = document.createElement('div');
     div.className = 'participant-item';
+
+    // Avatar: foto/GIF se disponível, senão inicial com cor
+    const avatarHtml = photoUrl
+      ? `<div class="avatar avatar-sm" style="background:transparent;padding:0">
+           <img src="${photoUrl}" alt="${nameInitial(name)}"
+             style="width:100%;height:100%;object-fit:cover;border-radius:50%;display:block"
+             onerror="this.parentElement.innerHTML='${nameInitial(name)}';this.parentElement.style.background='linear-gradient(135deg,${col},${col}88)'">
+         </div>`
+      : `<div class="avatar avatar-sm" style="background:linear-gradient(135deg,${col},${col}88)">${nameInitial(name)}</div>`;
+
     div.innerHTML = `
-      <div class="avatar avatar-sm" style="background:linear-gradient(135deg,${col},${col}88)">${nameInitial(name)}</div>
+      ${avatarHtml}
       <span class="p-name">${name}${isMe ? ' <span style="font-size:10px;color:var(--accent-text)">(você)</span>' : ''}</span>
       <div class="p-badges">
-        ${owner  ? '<span class="p-badge">👑</span>' : ''}
+        ${owner   ? '<span class="p-badge">👑</span>' : ''}
         ${vidIcon ? `<span class="p-badge">${vidIcon}</span>` : ''}
         ${micIcon ? `<span class="p-badge">${micIcon}</span>` : ''}
       </div>`;
@@ -1186,11 +1228,11 @@ function renderParticipantsList() {
 
   const myBroad = isCameraOn || isScreenSharing;
   const myType  = isScreenSharing ? 'screen' : (isCameraOn ? 'camera' : null);
-  renderItem(myId, myName, isOwner, myBroad, myType, !!micStream, !isMicOn, true);
+  renderItem(myId, myName, isOwner, myBroad, myType, !!micStream, !isMicOn, true, loadPhoto());
 
   for (const [pid, p] of participants) {
     if (pid === myId) continue;
-    renderItem(pid, p.name, p.isOwner, p.isBroadcasting, p.broadcastType, p.hasMic, p.micMuted, false);
+    renderItem(pid, p.name, p.isOwner, p.isBroadcasting, p.broadcastType, p.hasMic, p.micMuted, false, p.photoUrl || '');
   }
 }
 
@@ -1234,30 +1276,35 @@ function loadRoomsList() {
   fetchRooms();
 }
 
+function renderRoomsList(roomsArr) {
+  const c = document.getElementById('rooms-list');
+  if (!c) return;
+  if (!roomsArr || !roomsArr.length) {
+    c.innerHTML = '<p class="rooms-empty">Nenhuma sala disponível no momento.</p>';
+    return;
+  }
+  c.innerHTML = '';
+  roomsArr.forEach(room => {
+    const item = document.createElement('div');
+    item.className = 'room-list-item';
+    item.innerHTML = `
+      <div class="room-info">
+        <div class="room-title">${room.name || room.id}</div>
+        <div class="room-meta">${room.hasPassword ? '🔒 ' : ''}${room.participantCount} participante${room.participantCount !== 1 ? 's' : ''} · ${room.ownerName}</div>
+      </div>
+      <div class="room-join-btn">Entrar</div>`;
+    item.addEventListener('click', () => {
+      document.getElementById('join-room-id').value = room.id;
+      if (room.hasPassword) { document.getElementById('join-password').focus(); showToast('Esta sala tem senha.', 'info'); }
+      else joinRoom(room.id, '');
+    });
+    c.appendChild(item);
+  });
+}
+
 function fetchRooms() {
   socket.emit('list-rooms', (res) => {
-    const c = document.getElementById('rooms-list');
-    if (!res.rooms || !res.rooms.length) {
-      c.innerHTML = '<p class="rooms-empty">Nenhuma sala disponível no momento.</p>';
-      return;
-    }
-    c.innerHTML = '';
-    res.rooms.forEach(room => {
-      const item = document.createElement('div');
-      item.className = 'room-list-item';
-      item.innerHTML = `
-        <div class="room-info">
-          <div class="room-title">${room.name || room.id}</div>
-          <div class="room-meta">${room.hasPassword ? '🔒 ' : ''}${room.participantCount} participante${room.participantCount !== 1 ? 's' : ''} · ${room.ownerName}</div>
-        </div>
-        <div class="room-join-btn">Entrar</div>`;
-      item.addEventListener('click', () => {
-        document.getElementById('join-room-id').value = room.id;
-        if (room.hasPassword) { document.getElementById('join-password').focus(); showToast('Esta sala tem senha.', 'info'); }
-        else joinRoom(room.id, '');
-      });
-      c.appendChild(item);
-    });
+    renderRoomsList(res.rooms);
   });
 }
 
