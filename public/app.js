@@ -810,17 +810,27 @@ function getMicConstraints() {
 async function startMic() {
   if (micStream) return true;
   try {
-    micStream = await navigator.mediaDevices.getUserMedia(getMicConstraints());
+    // Carregar RNNoise em background na primeira vez que o mic é usado
+    if (!rnnoiseReady) loadRNNoise();
+
+    const raw = await navigator.mediaDevices.getUserMedia(getMicConstraints());
+    micStream = raw;
     isMicOn = true;
     socket.emit('mic-update', { hasMic: true, micMuted: false });
 
-    const track = micStream.getAudioTracks()[0];
+    let trackToSend = raw.getAudioTracks()[0];
+
+    // Se RNNoise já carregou e supressão está ligada, aplicar pipeline
+    if (noiseSuppressionOn && rnnoiseReady) {
+      const processed = await applyRNNoise(raw);
+      trackToSend = processed.getAudioTracks()[0] || trackToSend;
+    }
+
     for (const [, entry] of peers) {
-      if (entry.pc) replaceAudioTrackInPeer(entry.pc, track);
+      if (entry.pc) replaceAudioTrackInPeer(entry.pc, trackToSend);
     }
     return true;
   } catch (err) {
-    // Fallback sem constraints avançadas (alguns Android mais antigos)
     try {
       micStream = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
       isMicOn = true;
@@ -840,6 +850,7 @@ async function startMic() {
 
 async function stopMic() {
   if (!micStream) return;
+  destroyRNNoise();
   micStream.getTracks().forEach(t => t.stop());
   micStream = null;
   isMicOn = false;
@@ -2008,39 +2019,122 @@ async function flipCamera() {
 
 document.getElementById('btn-flip-camera').addEventListener('click', flipCamera);
 
-// ==================== SUPRESSÃO DE RUÍDO ====================
+// ==================== SUPRESSÃO DE RUÍDO (RNNoise AI) ====================
+
+// Estado do pipeline RNNoise
+let noiseCtx       = null;   // AudioContext
+let noiseWorklet   = null;   // AudioWorkletNode (RNNoise)
+let noiseSource    = null;   // MediaStreamAudioSourceNode
+let noiseDest      = null;   // MediaStreamAudioDestinationNode
+let noiseStream    = null;   // stream processado pelo RNNoise
+let rnnoiseModule  = null;   // WASM module carregado
+let rnnoiseReady   = false;  // módulo WASM pronto
+
+// URL do RNNoise WASM (Jitsi CDN — open source, Apache 2.0)
+const RNNOISE_WASM_URL = 'https://cdn.jsdelivr.net/npm/@jitsi/rnnoise-wasm@0.0.1/dist/rnnoise.wasm';
+const RNNOISE_JS_URL   = 'https://cdn.jsdelivr.net/npm/@jitsi/rnnoise-wasm@0.0.1/dist/rnnoise.js';
+
+async function loadRNNoise() {
+  if (rnnoiseReady) return true;
+  try {
+    // Carregar o módulo JS do RNNoise dinamicamente
+    await new Promise((resolve, reject) => {
+      const script = document.createElement('script');
+      script.src = RNNOISE_JS_URL;
+      script.onload  = resolve;
+      script.onerror = reject;
+      document.head.appendChild(script);
+    });
+
+    // Inicializar o módulo WASM
+    rnnoiseModule = await window.createRNNoise({ locateFile: () => RNNOISE_WASM_URL });
+    rnnoiseReady  = true;
+    return true;
+  } catch (err) {
+    console.warn('RNNoise WASM não disponível, usando supressão nativa do browser:', err);
+    return false;
+  }
+}
+
+async function applyRNNoise(rawStream) {
+  if (!rnnoiseReady || !rnnoiseModule) return rawStream;
+
+  try {
+    // Criar AudioContext com a mesma taxa de amostragem do stream
+    noiseCtx  = new (window.AudioContext || window.webkitAudioContext)({ sampleRate: 48000 });
+
+    // Registrar o worklet processor
+    await noiseCtx.audioWorklet.addModule('/noise-processor.js');
+
+    // Criar nós
+    noiseSource  = noiseCtx.createMediaStreamSource(rawStream);
+    noiseWorklet = new AudioWorkletNode(noiseCtx, 'rnnoise-processor');
+    noiseDest    = noiseCtx.createMediaStreamDestination();
+
+    // Enviar o módulo WASM para o worklet via port
+    noiseWorklet.port.postMessage({ type: 'init', module: rnnoiseModule });
+
+    // Conectar pipeline: source → rnnoise → destination
+    noiseSource.connect(noiseWorklet);
+    noiseWorklet.connect(noiseDest);
+
+    noiseStream = noiseDest.stream;
+    return noiseStream;
+  } catch (err) {
+    console.warn('AudioWorklet RNNoise falhou, usando stream original:', err);
+    destroyRNNoise();
+    return rawStream;
+  }
+}
+
+function destroyRNNoise() {
+  if (noiseWorklet) {
+    try { noiseWorklet.port.postMessage({ type: 'destroy' }); } catch (_) {}
+    noiseWorklet.disconnect();
+    noiseWorklet = null;
+  }
+  if (noiseSource) { noiseSource.disconnect(); noiseSource = null; }
+  if (noiseCtx)    { noiseCtx.close().catch(() => {}); noiseCtx = null; }
+  noiseDest  = null;
+  noiseStream = null;
+}
 
 async function toggleNoiseSuppression() {
   noiseSuppressionOn = !noiseSuppressionOn;
 
-  // Se mic ativo, recriar com novas configurações
+  // Se mic ativo, reaplicar pipeline
   if (micStream) {
-    const track = micStream.getAudioTracks()[0];
-    if (track) {
-      try {
-        await track.applyConstraints({
-          echoCancellation:  noiseSuppressionOn,
-          noiseSuppression:  noiseSuppressionOn,
-          autoGainControl:   noiseSuppressionOn
-        });
-      } catch (_) {
-        // fallback: recriar stream
-        micStream.getTracks().forEach(t => t.stop());
-        micStream = null;
-        await startMic();
+    const oldTrack = micStream.getAudioTracks()[0];
+
+    if (noiseSuppressionOn && rnnoiseReady) {
+      // Ativar RNNoise
+      const processedStream = await applyRNNoise(micStream);
+      const processedTrack  = processedStream.getAudioTracks()[0];
+      if (processedTrack && processedTrack !== oldTrack) {
+        for (const [, entry] of peers) {
+          if (entry.pc) replaceAudioTrackInPeer(entry.pc, processedTrack);
+        }
       }
+      showToast('🎙️ RNNoise ativado — ruído removido por IA', 'success');
+    } else {
+      // Desativar — voltar ao mic direto
+      destroyRNNoise();
+      if (oldTrack) {
+        for (const [, entry] of peers) {
+          if (entry.pc) replaceAudioTrackInPeer(entry.pc, oldTrack);
+        }
+      }
+      showToast('Supressão de ruído desativada', 'info');
     }
   }
 
   const btn = document.getElementById('btn-noise');
   if (noiseSuppressionOn) {
     btn.className = 'toolbar-btn active-noise';
-    btn.querySelector('.btn-label').textContent = 'Ruído';
-    showToast('Supressão de ruído ativada', 'success');
+    btn.querySelector('.btn-label').textContent = 'RNNoise';
   } else {
     btn.className = 'toolbar-btn off-noise';
     btn.querySelector('.btn-label').textContent = 'Ruído Off';
-    showToast('Supressão de ruído desativada', 'info');
   }
 }
 
