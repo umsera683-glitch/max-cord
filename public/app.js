@@ -492,15 +492,35 @@ function handleRemoteTrack(peerId, event) {
   if (event.track.kind === 'video') {
     upsertVideoTile(peerId, stream);
   } else if (event.track.kind === 'audio') {
+    // Tentar adicionar o áudio ao vídeo tile existente
     const videoTile = document.getElementById(`${peerId}-video`);
     if (videoTile) {
       const video = videoTile.querySelector('video');
-      if (video && video.srcObject === stream) {
-        video.muted = isAudioMuted;
+      if (video) {
+        // Garantir que o track de áudio está no srcObject do vídeo
+        if (video.srcObject && video.srcObject !== stream) {
+          // Streams diferentes — adicionar o track de áudio ao stream do vídeo
+          try {
+            video.srcObject.addTrack(event.track);
+          } catch (_) {
+            // Fallback: trocar para o stream que tem vídeo+áudio
+            if (stream.getVideoTracks().length > 0) {
+              bindVideoPlayback(video, stream, peerId);
+            }
+          }
+        } else if (video.srcObject === stream) {
+          // Mesmo stream — apenas garantir play com áudio
+        } else {
+          // Sem srcObject ainda — atribuir agora
+          bindVideoPlayback(video, stream, peerId);
+        }
+        // Desmutar e dar play
+        if (!isAudioMuted) video.muted = false;
         video.play().catch(() => {});
         return;
       }
     }
+    // Sem tile de vídeo — criar tile de áudio puro
     const p = participants.get(peerId);
     upsertAudioTile(peerId, stream, p ? p.name : 'Remoto');
   }
@@ -523,39 +543,60 @@ function bindVideoPlayback(video, stream, peerId) {
   video.playsInline = true;
   video.setAttribute('playsinline', '');
   video.setAttribute('webkit-playsinline', '');
+
   const isSelf = peerId === myId;
-  video.muted = isSelf ? true : false;  // remoto começa desmutado
+  // Remoto: começa mutado para passar a autoplay policy,
+  // mas desmuta imediatamente após o play resolver
+  video.muted = isSelf ? true : true;
 
-  const tryPlay = () => {
-    const p = video.play();
-    if (p && p.then) {
-      p.then(() => {
-        if (!isSelf && !isAudioMuted) video.muted = false;
-      }).catch(() => {
+  const reveal = () => revealVideoEl(video);
+
+  const tryPlay = async () => {
+    try {
+      await video.play();
+      // Play ok — desmutar remoto se áudio global não estiver silenciado
+      if (!isSelf && !isAudioMuted) {
+        video.muted = false;
+      }
+      reveal();
+    } catch (err) {
+      // Autoplay bloqueado (mobile sem interação) — tentar com muted
+      if (!video.muted) {
         video.muted = true;
-        video.play().catch(() => {});
-      });
+        try {
+          await video.play();
+          reveal();
+          // Aguardar interação do usuário para desmutar
+          const unmute = () => {
+            if (!isSelf && !isAudioMuted) video.muted = false;
+            document.removeEventListener('click', unmute);
+            document.removeEventListener('touchend', unmute);
+          };
+          document.addEventListener('click', unmute, { once: true });
+          document.addEventListener('touchend', unmute, { once: true });
+        } catch (_) {}
+      }
     }
   };
 
-  const onFrame = () => {
-    if (video.videoWidth > 0 || video.readyState >= 2) revealVideoEl(video);
-  };
+  video.addEventListener('loadedmetadata', reveal, { once: true });
+  video.addEventListener('loadeddata',     reveal, { once: true });
+  video.addEventListener('playing',        reveal, { once: true });
 
-  video.addEventListener('loadedmetadata', onFrame);
-  video.addEventListener('loadeddata', onFrame);
-  video.addEventListener('playing', onFrame);
-  video.addEventListener('resize', onFrame);
-  if (typeof video.requestVideoFrameCallback === 'function') {
-    video.requestVideoFrameCallback(() => revealVideoEl(video));
-  }
+  // Quando um novo track é adicionado ao stream (ex: áudio chegou depois)
+  stream.addEventListener('addtrack', () => {
+    const hasAudio = stream.getAudioTracks().some(t => t.readyState === 'live');
+    if (hasAudio && !isSelf && !isAudioMuted) {
+      video.muted = false;
+      video.play().catch(() => {});
+    }
+  });
+
   tryPlay();
-  setTimeout(onFrame, 400);
+
+  // Fallback: revelar após 2.5s mesmo sem frames
   setTimeout(() => {
-    if (video.style.opacity !== '1') {
-      revealVideoEl(video);
-      tryPlay();
-    }
+    if (video.style.opacity !== '1') { reveal(); tryPlay(); }
   }, 2500);
 }
 
@@ -1115,7 +1156,15 @@ function toggleAudio() {
   document.querySelectorAll('#streams-grid video, #streams-grid audio').forEach(el => {
     const tile = el.closest('.stream-tile');
     const isSelf = tile && tile.dataset.peerId === myId;
-    el.muted = isSelf ? true : isAudioMuted;
+    if (isSelf) return; // nunca desmutar o próprio preview
+    el.muted = isAudioMuted;
+    // Ao desmutar, forçar play para garantir que o áudio começa
+    if (!isAudioMuted) {
+      el.play().catch(() => {
+        // se play falhar, deixar mutado por ora
+        el.muted = true;
+      });
+    }
   });
   updateToolbarUI();
   showToast(isAudioMuted ? 'Áudio silenciado' : 'Áudio ativado', isAudioMuted ? 'info' : 'success');
