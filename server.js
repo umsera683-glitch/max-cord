@@ -325,10 +325,8 @@ io.on('connection', (socket) => {
       return callback({ success: false, message: 'Senha incorreta.' });
     }
 
-    if (room.ownerName.toLowerCase() === userName.toLowerCase() && !room.participants.has(room.ownerId)) {
-      room.ownerId = socket.id;
-    }
-
+    // SEGURANÇA: NÃO transferir ownership por nome igual
+    // O dono só é reconhecido pelo socket.id original
     const joiningAsOwner = room.ownerId === socket.id;
 
     room.participants.set(socket.id, {
@@ -412,6 +410,26 @@ io.on('connection', (socket) => {
     const room = rooms.get(socket.roomId);
     return !!(room && room.participants.has(socket.id) && room.participants.has(targetId));
   }
+
+  // ---------- Chat ----------
+  socket.on('chat-message', (data) => {
+    const room = rooms.get(socket.roomId);
+    if (!room) return;
+    const p    = room.participants.get(socket.id);
+    const text = sanitizeStr((data || {}).text || '', 500);
+    if (!text) return;
+
+    const msg = {
+      id:        socket.id,
+      name:      p ? p.name : 'Anônimo',
+      photoUrl:  p ? (p.photoUrl || '') : '',
+      text,
+      time:      Date.now()
+    };
+
+    // Enviar para todos na sala (incluindo o remetente)
+    io.to(socket.roomId).emit('chat-message', msg);
+  });
 
   // ---------- Sinalização WebRTC ----------
   socket.on('request-peer', (data) => {

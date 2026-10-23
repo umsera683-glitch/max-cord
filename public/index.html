@@ -255,6 +255,21 @@
       </div>
       <div id="participants-list" class="participants-list"></div>
     </aside>
+
+    <!-- Chat -->
+    <aside id="chat-panel" class="chat-panel hidden">
+      <div class="panel-header">
+        <span class="panel-title">Chat</span>
+        <button id="btn-close-chat" class="btn-icon-sm">✕</button>
+      </div>
+      <div id="chat-messages" class="chat-messages"></div>
+      <div class="chat-input-row">
+        <input type="text" id="chat-input" placeholder="Mensagem..." maxlength="500" class="chat-input" autocomplete="off">
+        <button id="btn-chat-send" class="btn-chat-send" title="Enviar">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><line x1="22" y1="2" x2="11" y2="13"/><polygon points="22 2 15 22 11 13 2 9 22 2"/></svg>
+        </button>
+      </div>
+    </aside>
   </div>
 
   <!-- Toolbar -->
@@ -268,13 +283,31 @@
         <svg class="tb-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M23 7 16 12 23 17V7z"/><rect x="1" y="5" width="15" height="14" rx="2"/></svg>
         <span class="btn-label">Câmera</span>
       </button>
+      <!-- Flip câmera (só aparece no mobile com câmera ativa) -->
+      <button id="btn-flip-camera" class="toolbar-btn hidden" title="Virar câmera">
+        <svg class="tb-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M1 4v6h6"/><path d="M23 20v-6h-6"/><path d="M20.49 9A9 9 0 0 0 5.64 5.64L1 10m22 4-4.64 4.36A9 9 0 0 1 3.51 15"/></svg>
+        <span class="btn-label">Virar</span>
+      </button>
       <button id="btn-mic" class="toolbar-btn" title="Microfone">
         <svg class="tb-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/><line x1="12" y1="19" x2="12" y2="23"/><line x1="8" y1="23" x2="16" y2="23"/></svg>
         <span class="btn-label">Mic</span>
       </button>
+      <!-- Supressão de ruído -->
+      <button id="btn-noise" class="toolbar-btn active-noise" title="Supressão de ruído">
+        <svg class="tb-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 18V5l12-2v13"/><circle cx="6" cy="18" r="3"/><circle cx="18" cy="16" r="3"/></svg>
+        <span class="btn-label">Ruído</span>
+      </button>
       <button id="btn-audio" class="toolbar-btn active-audio" title="Áudio recebido">
         <svg class="tb-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"/><path d="M19.07 4.93a10 10 0 0 1 0 14.14"/><path d="M15.54 8.46a5 5 0 0 1 0 7.07"/></svg>
         <span class="btn-label">Áudio</span>
+      </button>
+      <!-- Chat -->
+      <button id="btn-chat" class="toolbar-btn" title="Chat">
+        <span style="position:relative;display:inline-flex">
+          <svg class="tb-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
+          <span id="chat-badge" class="chat-badge hidden">0</span>
+        </span>
+        <span class="btn-label">Chat</span>
       </button>
       <div class="toolbar-divider"></div>
       <button id="btn-leave" class="toolbar-btn toolbar-btn-leave" title="Sair da sala">
@@ -421,6 +454,40 @@
         <div class="theme-card-name">Synthwave</div>
       </div>
 
+    </div>
+  </div>
+</div>
+
+<!-- ===================== MODAL QUALIDADE ===================== -->
+<div id="modal-quality" class="modal-overlay hidden" role="dialog" aria-modal="true">
+  <div class="modal-box" style="max-width:360px">
+    <div class="modal-header">
+      <h2 class="modal-title">📺 Qualidade da Transmissão</h2>
+      <button id="btn-quality-close" class="btn-icon-sm">✕</button>
+    </div>
+    <p class="modal-desc">Escolha a qualidade antes de iniciar. Qualidade maior exige mais internet.</p>
+    <div style="display:flex;flex-direction:column;gap:10px;margin-top:4px">
+      <button class="quality-option" data-quality="high">
+        <div class="quality-icon">🔵</div>
+        <div class="quality-info">
+          <div class="quality-name">Alta — 1080p / 30fps</div>
+          <div class="quality-desc">Melhor qualidade · recomendado em Wi-Fi</div>
+        </div>
+      </button>
+      <button class="quality-option" data-quality="medium">
+        <div class="quality-icon">🟡</div>
+        <div class="quality-info">
+          <div class="quality-name">Média — 720p / 30fps</div>
+          <div class="quality-desc">Equilibrado · funciona bem em 4G</div>
+        </div>
+      </button>
+      <button class="quality-option" data-quality="low">
+        <div class="quality-icon">🔴</div>
+        <div class="quality-info">
+          <div class="quality-name">Baixa — 480p / 15fps</div>
+          <div class="quality-desc">Economiza dados · para conexões lentas</div>
+        </div>
+      </button>
     </div>
   </div>
 </div>

@@ -24,6 +24,14 @@ let isScreenSharing = false;
 let isCameraOn = false;
 let isMicOn = false;
 let isAudioMuted = false;
+let noiseSuppressionOn = true;   // supressão de ruído ligada por padrão
+let currentFacingMode = 'user';  // câmera frontal por padrão
+let streamQuality = 'high';      // qualidade padrão
+let pendingStreamType = null;    // 'screen' | 'camera' — aguardando modal de qualidade
+
+// Estado do chat
+let chatUnread = 0;
+let chatOpen = false;
 
 // peerId -> { pc, streams, makingOffer, ignoreOffer, polite }
 const peers = new Map();
@@ -130,6 +138,7 @@ function connectSocket() {
         timeout: 8000
       });
       setupSocketListeners();
+      setupChatListeners();
     }
 
     const onOk = () => { myId = socket.id; cleanup(); resolve(true); };
@@ -787,9 +796,9 @@ function getMicAudioTrack() {
 function getMicConstraints() {
   return {
     audio: {
-      echoCancellation:   true,
-      noiseSuppression:   true,
-      autoGainControl:    true,
+      echoCancellation:   noiseSuppressionOn,
+      noiseSuppression:   noiseSuppressionOn,
+      autoGainControl:    noiseSuppressionOn,
       channelCount:       1,
       sampleRate:         48000,
       sampleSize:         16
@@ -857,23 +866,22 @@ async function toggleMic() {
 
 async function startCamera() {
   try {
-    // Mobile: câmera frontal com resolução adaptada
-    // Desktop: câmera HD padrão
+    const q = QUALITY_PRESETS[streamQuality] || QUALITY_PRESETS.high;
     const constraints = isMobile()
       ? {
           video: {
-            facingMode:  'user',
-            width:       { ideal: 640 },
-            height:      { ideal: 480 },
-            frameRate:   { ideal: 24 }
+            facingMode:  currentFacingMode,
+            width:       { ideal: Math.min(q.width, 640) },
+            height:      { ideal: Math.min(q.height, 480) },
+            frameRate:   { ideal: q.frameRate }
           },
           audio: false
         }
       : {
           video: {
-            width:     { ideal: 1280 },
-            height:    { ideal: 720 },
-            frameRate: { ideal: 30 }
+            width:     { ideal: q.width },
+            height:    { ideal: q.height },
+            frameRate: { ideal: q.frameRate }
           },
           audio: false
         };
@@ -899,6 +907,10 @@ async function startCamera() {
     socket.emit('stream-started', { type: isScreenSharing ? 'screen' : 'camera', hasAudio: !!micStream });
     updateSelfPreview();
     updateToolbarUI();
+    // Mostrar botão de flip só no mobile com câmera ativa
+    if (isMobile()) {
+      document.getElementById('btn-flip-camera').classList.remove('hidden');
+    }
     showToast('Câmera ligada', 'success');
   } catch (err) {
     isCameraOn = false;
@@ -929,6 +941,8 @@ async function stopCamera() {
 
   updateSelfPreview();
   updateToolbarUI();
+  // Esconder flip quando câmera desliga
+  document.getElementById('btn-flip-camera').classList.add('hidden');
   showToast('Câmera desligada', 'info');
 }
 
@@ -1355,6 +1369,11 @@ function leaveRoom(notify = true) {
   grid.className = 'streams-grid';
 
   document.getElementById('participants-list').innerHTML = '';
+  document.getElementById('chat-messages').innerHTML = '';
+  chatUnread = 0; chatOpen = false;
+  document.getElementById('chat-badge').classList.add('hidden');
+  document.getElementById('chat-panel').classList.add('hidden');
+  document.getElementById('btn-flip-camera').classList.add('hidden');
   document.getElementById('room-view').classList.add('hidden');
   document.getElementById('lobby-view').classList.remove('hidden');
   document.getElementById('btn-delete-room').classList.add('hidden');
@@ -1723,9 +1742,21 @@ document.getElementById('btn-share-screen').addEventListener('click', () => {
     showToast('No celular use a Câmera para transmitir 📹', 'info');
     return;
   }
-  isScreenSharing ? stopScreenShare() : startScreenShare();
+  if (isScreenSharing) {
+    stopScreenShare();
+  } else {
+    // Mostrar modal de qualidade antes de iniciar
+    openQualityModal('screen');
+  }
 });
-document.getElementById('btn-camera').addEventListener('click', () => isCameraOn ? stopCamera() : startCamera());
+document.getElementById('btn-camera').addEventListener('click', () => {
+  if (isCameraOn) {
+    stopCamera();
+  } else {
+    // Mostrar modal de qualidade antes de iniciar
+    openQualityModal('camera');
+  }
+});
 document.getElementById('btn-mic').addEventListener('click', toggleMic);
 document.getElementById('btn-audio').addEventListener('click', toggleAudio);
 document.getElementById('btn-leave').addEventListener('click', () => leaveRoom(true));
@@ -1753,7 +1784,7 @@ document.addEventListener('contextmenu', e => { if (e.target.tagName === 'VIDEO'
 
 // ==================== SAIR AO FECHAR / RECARREGAR ====================
 
-// beforeunload: dispara ao fechar aba, fechar navegador ou recarregar
+// beforeunload: sair ao fechar aba/janela
 window.addEventListener('beforeunload', () => {
   if (currentRoomId && socket) {
     stopAllMedia();
@@ -1761,12 +1792,21 @@ window.addEventListener('beforeunload', () => {
   }
 });
 
-// pagehide: fallback para mobile (iOS Safari não dispara beforeunload confiável)
+// pagehide: fallback para iOS — só sair se NÃO for cache (persisted=false)
+// persisted=true = apenas minimizou/trocou de app → NÃO sair da sala
 window.addEventListener('pagehide', (e) => {
-  if (e.persisted) return;
+  if (e.persisted) return; // Minimizou — manter na sala
   if (currentRoomId && socket) {
     stopAllMedia();
     socket.emit('leave-room');
+  }
+});
+
+// visibilitychange: NÃO sair ao minimizar/background — apenas reconectar se preciso
+document.addEventListener('visibilitychange', () => {
+  if (document.visibilityState === 'visible' && currentRoomId && socket && !socket.connected) {
+    // Voltou ao app e perdeu conexão — tentar reconectar
+    connectSocket();
   }
 });
 
@@ -1846,6 +1886,203 @@ document.getElementById('btn-themes-close').addEventListener('click', closeTheme
 // Fechar ao clicar fora
 document.getElementById('modal-themes').addEventListener('click', e => {
   if (e.target === document.getElementById('modal-themes')) closeThemeModal();
+});
+
+// ==================== CHAT ====================
+
+function setupChatListeners() {
+  socket.on('chat-message', (msg) => {
+    addChatMessage(msg);
+    // Notificar se chat estiver fechado
+    if (!chatOpen) {
+      chatUnread++;
+      const badge = document.getElementById('chat-badge');
+      badge.textContent = chatUnread > 99 ? '99+' : chatUnread;
+      badge.classList.remove('hidden');
+      // Toast discreto
+      showToast(`💬 ${msg.name}: ${msg.text.slice(0, 40)}${msg.text.length > 40 ? '...' : ''}`, 'info');
+    }
+  });
+}
+
+function addChatMessage(msg) {
+  const container = document.getElementById('chat-messages');
+  const isMe = msg.id === myId;
+  const col  = nameColor(msg.name);
+  const time = new Date(msg.time).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' });
+
+  const div = document.createElement('div');
+  div.className = `chat-msg${isMe ? ' own' : ''}`;
+
+  const avatarHtml = msg.photoUrl
+    ? `<div class="chat-msg-avatar"><img src="${msg.photoUrl}" onerror="this.parentElement.textContent='${nameInitial(msg.name)}'"></div>`
+    : `<div class="chat-msg-avatar" style="background:linear-gradient(135deg,${col},${col}88)">${nameInitial(msg.name)}</div>`;
+
+  div.innerHTML = `
+    ${avatarHtml}
+    <div class="chat-msg-body">
+      <div class="chat-msg-header">
+        <span class="chat-msg-name">${msg.name}</span>
+        <span class="chat-msg-time">${time}</span>
+      </div>
+      <div class="chat-msg-text">${msg.text.replace(/</g,'&lt;').replace(/>/g,'&gt;')}</div>
+    </div>`;
+
+  container.appendChild(div);
+  container.scrollTop = container.scrollHeight;
+}
+
+function sendChatMessage() {
+  const input = document.getElementById('chat-input');
+  const text  = input.value.trim();
+  if (!text || !socket || !currentRoomId) return;
+  socket.emit('chat-message', { text });
+  input.value = '';
+  input.focus();
+}
+
+function toggleChat() {
+  const panel = document.getElementById('chat-panel');
+  chatOpen = !chatOpen;
+  panel.classList.toggle('hidden', !chatOpen);
+
+  if (chatOpen) {
+    // Zerar badge
+    chatUnread = 0;
+    document.getElementById('chat-badge').classList.add('hidden');
+    // Focar input
+    setTimeout(() => document.getElementById('chat-input').focus(), 100);
+    // Scroll para baixo
+    const msgs = document.getElementById('chat-messages');
+    msgs.scrollTop = msgs.scrollHeight;
+  }
+}
+
+document.getElementById('btn-chat').addEventListener('click', toggleChat);
+document.getElementById('btn-close-chat').addEventListener('click', () => {
+  chatOpen = false;
+  document.getElementById('chat-panel').classList.add('hidden');
+});
+document.getElementById('btn-chat-send').addEventListener('click', sendChatMessage);
+document.getElementById('chat-input').addEventListener('keypress', e => {
+  if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendChatMessage(); }
+});
+
+// ==================== FLIP CÂMERA (mobile) ====================
+
+async function flipCamera() {
+  if (!isCameraOn || !cameraStream) return;
+  currentFacingMode = currentFacingMode === 'user' ? 'environment' : 'user';
+
+  try {
+    // Parar stream atual
+    cameraStream.getTracks().forEach(t => t.stop());
+
+    const constraints = {
+      video: {
+        facingMode: currentFacingMode,
+        width:  { ideal: streamQuality === 'high' ? 1280 : streamQuality === 'medium' ? 720 : 480 },
+        height: { ideal: streamQuality === 'high' ? 720  : streamQuality === 'medium' ? 480 : 360 },
+        frameRate: { ideal: streamQuality === 'low' ? 15 : 30 }
+      },
+      audio: false
+    };
+
+    cameraStream = await navigator.mediaDevices.getUserMedia(constraints);
+    const newVideoTrack = cameraStream.getVideoTracks()[0];
+
+    // Substituir nos peers
+    replaceVideoInAllPeers(newVideoTrack);
+    updateSelfPreview();
+    showToast(`Câmera ${currentFacingMode === 'user' ? 'frontal' : 'traseira'} ativada`, 'success');
+  } catch (err) {
+    console.error('flipCamera:', err);
+    showToast('Não foi possível virar a câmera', 'error');
+    currentFacingMode = currentFacingMode === 'user' ? 'environment' : 'user'; // reverter
+  }
+}
+
+document.getElementById('btn-flip-camera').addEventListener('click', flipCamera);
+
+// ==================== SUPRESSÃO DE RUÍDO ====================
+
+async function toggleNoiseSuppression() {
+  noiseSuppressionOn = !noiseSuppressionOn;
+
+  // Se mic ativo, recriar com novas configurações
+  if (micStream) {
+    const track = micStream.getAudioTracks()[0];
+    if (track) {
+      try {
+        await track.applyConstraints({
+          echoCancellation:  noiseSuppressionOn,
+          noiseSuppression:  noiseSuppressionOn,
+          autoGainControl:   noiseSuppressionOn
+        });
+      } catch (_) {
+        // fallback: recriar stream
+        micStream.getTracks().forEach(t => t.stop());
+        micStream = null;
+        await startMic();
+      }
+    }
+  }
+
+  const btn = document.getElementById('btn-noise');
+  if (noiseSuppressionOn) {
+    btn.className = 'toolbar-btn active-noise';
+    btn.querySelector('.btn-label').textContent = 'Ruído';
+    showToast('Supressão de ruído ativada', 'success');
+  } else {
+    btn.className = 'toolbar-btn off-noise';
+    btn.querySelector('.btn-label').textContent = 'Ruído Off';
+    showToast('Supressão de ruído desativada', 'info');
+  }
+}
+
+document.getElementById('btn-noise').addEventListener('click', toggleNoiseSuppression);
+
+// ==================== QUALIDADE DE TRANSMISSÃO ====================
+
+const QUALITY_PRESETS = {
+  high:   { width: 1920, height: 1080, frameRate: 30, bitrate: 2500000 },
+  medium: { width: 1280, height: 720,  frameRate: 30, bitrate: 1200000 },
+  low:    { width: 854,  height: 480,  frameRate: 15, bitrate:  500000 }
+};
+
+function openQualityModal(type) {
+  pendingStreamType = type;
+  // Marcar qualidade atual
+  document.querySelectorAll('.quality-option').forEach(btn => {
+    btn.classList.toggle('selected', btn.dataset.quality === streamQuality);
+  });
+  document.getElementById('modal-quality').classList.remove('hidden');
+}
+
+function closeQualityModal() {
+  document.getElementById('modal-quality').classList.add('hidden');
+  pendingStreamType = null;
+}
+
+document.getElementById('btn-quality-close').addEventListener('click', closeQualityModal);
+document.getElementById('modal-quality').addEventListener('click', e => {
+  if (e.target === document.getElementById('modal-quality')) closeQualityModal();
+});
+
+document.querySelectorAll('.quality-option').forEach(btn => {
+  btn.addEventListener('click', async () => {
+    streamQuality = btn.dataset.quality;
+    document.querySelectorAll('.quality-option').forEach(b => b.classList.remove('selected'));
+    btn.classList.add('selected');
+    closeQualityModal();
+
+    // Iniciar transmissão com a qualidade escolhida
+    if (pendingStreamType === 'camera') {
+      await startCamera();
+    } else if (pendingStreamType === 'screen') {
+      await startScreenShare();
+    }
+  });
 });
 
 // ==================== INIT ====================
