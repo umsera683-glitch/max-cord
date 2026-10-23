@@ -1470,6 +1470,12 @@ function updateToolbarUI() {
 
   btnAudio.className = `toolbar-btn ${isAudioMuted ? 'muted-audio' : 'active-audio'}`;
   btnAudio.querySelector('.btn-label').textContent = isAudioMuted ? 'Mudo' : 'Áudio';
+
+  // Select de qualidade — destacar quando transmitindo
+  const qualityWrap = document.getElementById('quality-select-wrap');
+  if (qualityWrap) {
+    qualityWrap.classList.toggle('broadcasting', isCameraOn || isScreenSharing);
+  }
 }
 
 // ==================== LISTA DE SALAS ====================
@@ -1745,16 +1751,14 @@ document.getElementById('btn-share-screen').addEventListener('click', () => {
   if (isScreenSharing) {
     stopScreenShare();
   } else {
-    // Mostrar modal de qualidade antes de iniciar
-    openQualityModal('screen');
+    startScreenShare();
   }
 });
 document.getElementById('btn-camera').addEventListener('click', () => {
   if (isCameraOn) {
     stopCamera();
   } else {
-    // Mostrar modal de qualidade antes de iniciar
-    openQualityModal('camera');
+    startCamera();
   }
 });
 document.getElementById('btn-mic').addEventListener('click', toggleMic);
@@ -2042,6 +2046,39 @@ async function toggleNoiseSuppression() {
 
 document.getElementById('btn-noise').addEventListener('click', toggleNoiseSuppression);
 
+// ==================== SELECT DE QUALIDADE (inline na toolbar) ====================
+
+document.getElementById('quality-select').addEventListener('change', async (e) => {
+  streamQuality = e.target.value;
+  try { localStorage.setItem('mc_quality', streamQuality); } catch (_) {}
+
+  // Se já está transmitindo, reaplicar com a nova qualidade
+  if (isCameraOn && cameraStream) {
+    const q = QUALITY_PRESETS[streamQuality];
+    const videoTrack = cameraStream.getVideoTracks()[0];
+    if (videoTrack) {
+      try {
+        await videoTrack.applyConstraints({
+          width:     { ideal: isMobile() ? Math.min(q.width, 640)  : q.width  },
+          height:    { ideal: isMobile() ? Math.min(q.height, 480) : q.height },
+          frameRate: { ideal: q.frameRate }
+        });
+        showToast(`Qualidade: ${e.target.options[e.target.selectedIndex].text}`, 'success');
+      } catch (err) {
+        console.warn('applyConstraints:', err);
+        // Fallback: recriar a câmera com nova qualidade
+        await stopCamera();
+        await startCamera();
+      }
+    }
+  } else if (isScreenSharing && screenStream) {
+    // Para tela compartilhada, não dá para reaplicar constraints — notificar apenas
+    showToast(`Qualidade ${e.target.options[e.target.selectedIndex].text} aplicada na próxima transmissão`, 'info');
+  } else {
+    showToast(`Qualidade definida: ${e.target.options[e.target.selectedIndex].text}`, 'info');
+  }
+});
+
 // ==================== QUALIDADE DE TRANSMISSÃO ====================
 
 const QUALITY_PRESETS = {
@@ -2090,6 +2127,16 @@ document.querySelectorAll('.quality-option').forEach(btn => {
 (function init() {
   // Aplicar tema salvo ANTES de tudo (evita flash de tema errado)
   applyTheme(loadTheme());
+
+  // Restaurar qualidade salva
+  try {
+    const savedQ = localStorage.getItem('mc_quality');
+    if (savedQ && ['high','medium','low'].includes(savedQ)) {
+      streamQuality = savedQ;
+      const sel = document.getElementById('quality-select');
+      if (sel) sel.value = savedQ;
+    }
+  } catch (_) {}
 
   const saved = loadName();
   if (saved) {

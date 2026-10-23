@@ -1512,3 +1512,79 @@ button:active { opacity: 0.82; }
 .quality-icon { font-size: 20px; flex-shrink: 0; }
 .quality-name { font-size: 14px; font-weight: 600; color: var(--text-primary); }
 .quality-desc { font-size: 11px; color: var(--text-muted); margin-top: 2px; }
+
+/* ===================== QUALITY SELECT ===================== */
+
+.quality-select-wrap {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 3px;
+  background: var(--bg-surface2);
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  padding: 6px 10px 7px;
+  cursor: pointer;
+  transition: border-color 0.15s, background 0.15s;
+  position: relative;
+}
+
+.quality-select-wrap:focus-within {
+  border-color: var(--border-focus);
+  background: var(--bg-active);
+}
+
+.quality-select-icon {
+  width: 18px; height: 18px;
+  color: var(--text-muted);
+  pointer-events: none;
+  flex-shrink: 0;
+}
+
+.quality-select {
+  appearance: none;
+  -webkit-appearance: none;
+  background: transparent;
+  border: none;
+  outline: none;
+  color: var(--text-muted);
+  font-size: 9px;
+  font-weight: 600;
+  font-family: inherit;
+  cursor: pointer;
+  text-align: center;
+  padding: 0;
+  width: 100%;
+}
+
+.quality-select option {
+  background: #1a1a2e;
+  color: #e2e8f0;
+  font-size: 13px;
+}
+
+/* Ativo quando transmitindo */
+.quality-select-wrap.broadcasting {
+  border-color: var(--accent) !important;
+  background: var(--bg-active) !important;
+}
+
+.quality-select-wrap.broadcasting .quality-select-icon {
+  color: var(--accent-text) !important;
+}
+
+.quality-select-wrap.broadcasting .quality-select {
+  color: var(--accent-text) !important;
+}
+
+@media (max-width: 640px) {
+  .quality-select-wrap {
+    padding: 5px 8px 6px;
+  }
+  .quality-select-icon {
+    width: 16px; height: 16px;
+  }
+  .quality-select {
+    font-size: 8px;
+  }
+}
