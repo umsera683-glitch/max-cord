@@ -234,7 +234,12 @@ function setupSocketListeners() {
 
   socket.on('disconnect', (reason) => {
     if (reason === 'io client disconnect') return;
-    showToast('Conexão perdida. Reconectando...', 'error');
+    // Não mostrar toast imediato — reconexão automática acontece em background
+    // Só avisar se demorar mais de 3s sem reconectar
+    const warnTimer = setTimeout(() => {
+      if (!socket.connected) showToast('Conexão perdida. Reconectando...', 'error');
+    }, 3000);
+    socket.once('connect', () => clearTimeout(warnTimer));
   });
 
   socket.on('connect', () => {
@@ -519,7 +524,7 @@ function bindVideoPlayback(video, stream, peerId) {
   video.setAttribute('playsinline', '');
   video.setAttribute('webkit-playsinline', '');
   const isSelf = peerId === myId;
-  video.muted = isSelf ? true : true;
+  video.muted = isSelf ? true : false;  // remoto começa desmutado
 
   const tryPlay = () => {
     const p = video.play();
@@ -2140,15 +2145,25 @@ async function toggleNoiseSuppression() {
 
 document.getElementById('btn-noise').addEventListener('click', toggleNoiseSuppression);
 
+// ==================== QUALIDADE DE TRANSMISSÃO ====================
+
+const QUALITY_PRESETS = {
+  high:   { width: 1920, height: 1080, frameRate: 30, bitrate: 2500000 },
+  medium: { width: 1280, height: 720,  frameRate: 30, bitrate: 1200000 },
+  low:    { width: 854,  height: 480,  frameRate: 15, bitrate:  500000 }
+};
+
 // ==================== SELECT DE QUALIDADE (inline na toolbar) ====================
 
 document.getElementById('quality-select').addEventListener('change', async (e) => {
   streamQuality = e.target.value;
   try { localStorage.setItem('mc_quality', streamQuality); } catch (_) {}
 
-  // Se já está transmitindo, reaplicar com a nova qualidade
+  const q = QUALITY_PRESETS[streamQuality];
+  if (!q) return;
+
+  // Se câmera ativa, reaplicar constraints em tempo real
   if (isCameraOn && cameraStream) {
-    const q = QUALITY_PRESETS[streamQuality];
     const videoTrack = cameraStream.getVideoTracks()[0];
     if (videoTrack) {
       try {
@@ -2157,29 +2172,36 @@ document.getElementById('quality-select').addEventListener('change', async (e) =
           height:    { ideal: isMobile() ? Math.min(q.height, 480) : q.height },
           frameRate: { ideal: q.frameRate }
         });
+        // Atualizar bitrate nos senders
+        for (const [, entry] of peers) {
+          if (!entry.pc) continue;
+          const vs = entry.pc.getSenders().find(s => s.track && s.track.kind === 'video');
+          if (vs) optimizeVideoSenderWithPreset(vs, q);
+        }
         showToast(`Qualidade: ${e.target.options[e.target.selectedIndex].text}`, 'success');
       } catch (err) {
-        console.warn('applyConstraints:', err);
-        // Fallback: recriar a câmera com nova qualidade
+        console.warn('applyConstraints falhou, recriando câmera:', err);
         await stopCamera();
         await startCamera();
       }
     }
   } else if (isScreenSharing && screenStream) {
-    // Para tela compartilhada, não dá para reaplicar constraints — notificar apenas
-    showToast(`Qualidade ${e.target.options[e.target.selectedIndex].text} aplicada na próxima transmissão`, 'info');
+    showToast(`Qualidade ${e.target.options[e.target.selectedIndex].text} salva`, 'info');
   } else {
     showToast(`Qualidade definida: ${e.target.options[e.target.selectedIndex].text}`, 'info');
   }
 });
 
-// ==================== QUALIDADE DE TRANSMISSÃO ====================
-
-const QUALITY_PRESETS = {
-  high:   { width: 1920, height: 1080, frameRate: 30, bitrate: 2500000 },
-  medium: { width: 1280, height: 720,  frameRate: 30, bitrate: 1200000 },
-  low:    { width: 854,  height: 480,  frameRate: 15, bitrate:  500000 }
-};
+async function optimizeVideoSenderWithPreset(sender, q) {
+  if (!sender || typeof sender.getParameters !== 'function') return;
+  try {
+    const params = sender.getParameters();
+    if (!params.encodings || !params.encodings.length) params.encodings = [{}];
+    params.encodings[0].maxBitrate  = q.bitrate;
+    params.encodings[0].maxFramerate = q.frameRate;
+    await sender.setParameters(params);
+  } catch (_) {}
+}
 
 function openQualityModal(type) {
   pendingStreamType = type;

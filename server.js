@@ -325,8 +325,14 @@ io.on('connection', (socket) => {
       return callback({ success: false, message: 'Senha incorreta.' });
     }
 
-    // SEGURANÇA: NÃO transferir ownership por nome igual
-    // O dono só é reconhecido pelo socket.id original
+    // Reconexão do dono: se entrou com o mesmo nome do criador original
+    // e o dono original não está mais conectado → restaurar privilégio
+    const ownerCurrentlyOnline = room.participants.has(room.ownerId);
+    if (!ownerCurrentlyOnline && userName.toLowerCase() === room.ownerName.toLowerCase()) {
+      room.ownerId = socket.id;
+    }
+
+    // SEGURANÇA: ownership verificado pelo socket.id atual
     const joiningAsOwner = room.ownerId === socket.id;
 
     room.participants.set(socket.id, {
