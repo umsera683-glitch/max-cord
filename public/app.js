@@ -545,59 +545,93 @@ function bindVideoPlayback(video, stream, peerId) {
   video.setAttribute('webkit-playsinline', '');
 
   const isSelf = peerId === myId;
-  // Remoto: começa mutado para passar a autoplay policy,
-  // mas desmuta imediatamente após o play resolver
-  video.muted = isSelf ? true : true;
-
   const reveal = () => revealVideoEl(video);
-
-  const tryPlay = async () => {
-    try {
-      await video.play();
-      // Play ok — desmutar remoto se áudio global não estiver silenciado
-      if (!isSelf && !isAudioMuted) {
-        video.muted = false;
-      }
-      reveal();
-    } catch (err) {
-      // Autoplay bloqueado (mobile sem interação) — tentar com muted
-      if (!video.muted) {
-        video.muted = true;
-        try {
-          await video.play();
-          reveal();
-          // Aguardar interação do usuário para desmutar
-          const unmute = () => {
-            if (!isSelf && !isAudioMuted) video.muted = false;
-            document.removeEventListener('click', unmute);
-            document.removeEventListener('touchend', unmute);
-          };
-          document.addEventListener('click', unmute, { once: true });
-          document.addEventListener('touchend', unmute, { once: true });
-        } catch (_) {}
-      }
-    }
-  };
 
   video.addEventListener('loadedmetadata', reveal, { once: true });
   video.addEventListener('loadeddata',     reveal, { once: true });
   video.addEventListener('playing',        reveal, { once: true });
 
-  // Quando um novo track é adicionado ao stream (ex: áudio chegou depois)
+  // Quando novo track chega (áudio depois do vídeo)
   stream.addEventListener('addtrack', () => {
-    const hasAudio = stream.getAudioTracks().some(t => t.readyState === 'live');
-    if (hasAudio && !isSelf && !isAudioMuted) {
-      video.muted = false;
-      video.play().catch(() => {});
-    }
+    if (isSelf || isAudioMuted) return;
+    tryUnmuteVideo(video, peerId);
   });
 
-  tryPlay();
+  // Tentar play com áudio primeiro
+  video.muted = isSelf; // self = mudo, remoto = com som
 
-  // Fallback: revelar após 2.5s mesmo sem frames
-  setTimeout(() => {
-    if (video.style.opacity !== '1') { reveal(); tryPlay(); }
-  }, 2500);
+  video.play()
+    .then(() => {
+      // Play com áudio funcionou — revelar
+      reveal();
+      hideMutePrompt(video);
+    })
+    .catch(() => {
+      // Browser bloqueou — tocar mudo e mostrar botão para o usuário desmutar
+      video.muted = true;
+      video.play().then(() => {
+        reveal();
+        if (!isSelf && !isAudioMuted) {
+          showMutePrompt(video, peerId);
+        }
+      }).catch(() => {});
+    });
+
+  // Fallback de reveal
+  setTimeout(() => { if (video.style.opacity !== '1') reveal(); }, 2500);
+}
+
+// Mostra overlay "🔊 Clique para ouvir" no tile
+function showMutePrompt(video, peerId) {
+  const tile = video.closest('.stream-tile');
+  if (!tile || tile.querySelector('.mute-prompt')) return;
+
+  const prompt = document.createElement('button');
+  prompt.className = 'mute-prompt';
+  prompt.innerHTML = '<span class="mute-prompt-icon">🔇</span><span>Clique para ouvir</span>';
+  tile.appendChild(prompt);
+
+  const activate = () => {
+    video.muted = false;
+    video.play().catch(() => {});
+    hideMutePrompt(video);
+    // Desmutar todos os outros vídeos remotos também
+    document.querySelectorAll('#streams-grid video').forEach(v => {
+      const t = v.closest('.stream-tile');
+      const isSelfTile = t && t.dataset.peerId === myId;
+      if (!isSelfTile && !isAudioMuted) {
+        v.muted = false;
+        v.play().catch(() => {});
+      }
+    });
+  };
+
+  prompt.addEventListener('click', activate, { once: true });
+  prompt.addEventListener('touchend', activate, { once: true });
+}
+
+function hideMutePrompt(video) {
+  const tile = video.closest('.stream-tile');
+  if (!tile) return;
+  const prompt = tile.querySelector('.mute-prompt');
+  if (prompt) prompt.remove();
+}
+
+function tryUnmuteVideo(video, peerId) {
+  if (isAudioMuted || peerId === myId) return;
+  if (!video.muted) return; // já com som
+
+  // Tentar desmutar direto
+  video.muted = false;
+  const p = video.play();
+  if (p && p.catch) {
+    p.catch(() => {
+      // Bloqueado — mostrar prompt
+      video.muted = true;
+      video.play().catch(() => {});
+      showMutePrompt(video, peerId);
+    });
+  }
 }
 
 function upsertVideoTile(peerId, stream) {
