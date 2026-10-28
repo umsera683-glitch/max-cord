@@ -15,8 +15,6 @@
   <meta property="og:description" content="Transmissão de tela e vídeo em tempo real">
   <script src="https://cdn.tailwindcss.com"></script>
   <script>
-    // Netlify (estático) → backend no Render; em qualquer outro host usa o próprio origin
-    // Assim qualquer usuário/navegador/dispositivo conecta no servidor certo
     window.SOCKET_URL = /netlify\.app$/i.test(location.hostname)
       ? 'https://max-cord.onrender.com'
       : location.origin;
@@ -27,7 +25,7 @@
 <body>
 
 <!-- ===================== LOBBY ===================== -->
-<div id="lobby-view" class="lobby-root lobby-fullscreen">
+<div id="lobby-view" class="lobby-root">
 
   <!-- Fundo com gradiente animado -->
   <div class="lobby-bg" aria-hidden="true">
@@ -102,10 +100,6 @@
         </div>
       </section>
 
-      <div class="lobby-tabs">
-        <button type="button" class="lobby-tab active" id="tab-stream">📡 Transmissão</button>
-        <button type="button" class="lobby-tab" id="tab-community">🏠 Comunidade</button>
-      </div>
       <!-- ---- Criar + Entrar ---- -->
       <div class="action-grid">
 
@@ -190,7 +184,7 @@
 </div>
 
 <!-- ===================== ROOM VIEW ===================== -->
-<div id="room-view" class="room-view room-fullscreen hidden">
+<div id="room-view" class="room-view hidden">
 
   <!-- Header -->
   <header class="room-header">
@@ -256,13 +250,46 @@
       </div>
       <div id="chat-messages" class="chat-messages"></div>
       <div class="chat-input-row">
-        <input type="text" id="chat-input" placeholder="Mensagem..." maxlength="500" class="chat-input" autocomplete="off">
+        <input type="text" id="chat-input" placeholder="Mensagem... (@ia para a IA)" maxlength="500" class="chat-input" autocomplete="off">
         <button id="btn-chat-send" class="btn-chat-send" title="Enviar">
           <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><line x1="22" y1="2" x2="11" y2="13"/><polygon points="22 2 15 22 11 13 2 9 22 2"/></svg>
         </button>
       </div>
     </aside>
-</div>
+
+    <!-- IA Beta -->
+    <aside id="ai-panel" class="ai-panel hidden">
+      <div class="panel-header">
+        <span class="panel-title">IA <span class="ai-beta-badge">BETA</span></span>
+        <button id="btn-close-ai" class="btn-icon-sm">✕</button>
+      </div>
+      <div class="ai-hints">
+        Dicas de jogo · capa da live · música · perguntas rápidas
+      </div>
+      <div class="ai-quick">
+        <button type="button" class="ai-chip" data-mode="game" data-prompt="Estou travado neste jogo. Me dê dicas práticas de como passar (sem spoiler pesado se possível).">🎮 Dicas de jogo</button>
+        <button type="button" class="ai-chip" data-mode="cover" data-prompt="Crie ideias de título, descrição e texto de capa para minha transmissão.">🖼️ Capa / título</button>
+        <button type="button" class="ai-chip" data-mode="music" data-prompt="Sugira músicas ou playlists que combinam com o clima deste jogo / live.">🎵 Música</button>
+        <button type="button" class="ai-chip" data-mode="chat" data-prompt="Como usar o MaxCord: compartilhar tela, microfone e volume no celular?">❓ Como usar</button>
+      </div>
+      <div class="ai-game-row">
+        <input type="text" id="ai-game" class="ai-game-input" placeholder="Jogo que está jogando (ex: GTA V, Free Fire)" maxlength="80" autocomplete="off">
+      </div>
+      <div id="ai-messages" class="ai-messages">
+        <div class="ai-welcome">
+          <strong>IA Beta do MaxCord</strong>
+          <p>Escreva o nome do jogo (opcional), escolha um atalho ou pergunte o que quiser.</p>
+          <p class="ai-welcome-note">Recurso experimental — se não gostar, o dono pode desligar no servidor (<code>AI_BETA_ENABLED=false</code>).</p>
+        </div>
+      </div>
+      <div class="ai-input-row">
+        <input type="text" id="ai-input" placeholder="Pergunte à IA..." maxlength="500" class="ai-input" autocomplete="off">
+        <button id="btn-ai-send" class="btn-chat-send" title="Perguntar">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><line x1="22" y1="2" x2="11" y2="13"/><polygon points="22 2 15 22 11 13 2 9 22 2"/></svg>
+        </button>
+      </div>
+    </aside>
+  </div>
 
   <!-- Toolbar -->
   <footer class="room-toolbar">
@@ -285,12 +312,12 @@
         <span class="btn-label">Mic</span>
       </button>
       <!-- Supressão de ruído RNNoise -->
-      <button id="btn-noise" class="toolbar-btn active-noise" title="Supressão de ruídos — clique para ativar/desativar">
-        <svg class="tb-icon" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/><line x1="12" y1="19" x2="12" y2="23"/><line x1="8" y1="23" x2="16" y2="23"/></svg>
-        <span class="btn-label">Supressão de ruídos</span>
+      <button id="btn-noise" class="toolbar-btn active-noise" title="Supressão de ruído por IA (RNNoise)">
+        <svg class="tb-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"/><line x1="3" y1="3" x2="21" y2="21" class="noise-off-line" style="display:none"/><circle cx="12" cy="12" r="2" fill="currentColor" opacity=".4"/></svg>
+        <span class="btn-label">RNNoise</span>
       </button>
-      <!-- Qualidade da transmissão (só aparece quando a transmissão está ativa) -->
-      <div class="quality-select-wrap hidden" id="quality-select-wrap" title="Qualidade da transmissão">
+      <!-- Qualidade da transmissão -->
+      <div class="quality-select-wrap" id="quality-select-wrap" title="Qualidade da transmissão">
         <svg class="tb-icon quality-select-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="3" width="20" height="14" rx="2"/><polyline points="8 21 12 17 16 21"/></svg>
         <select id="quality-select" class="quality-select">
           <option value="high">Alta · 1080p</option>
@@ -310,7 +337,12 @@
         </span>
         <span class="btn-label">Chat</span>
       </button>
-<div class="toolbar-divider"></div>
+      <!-- IA Beta -->
+      <button id="btn-ai" class="toolbar-btn" title="Assistente IA (Beta)">
+        <svg class="tb-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2a4 4 0 0 1 4 4v1h1a3 3 0 0 1 0 6h-.5"/><path d="M8 7V6a4 4 0 0 1 7.5-1.9"/><circle cx="9" cy="11" r="1" fill="currentColor"/><circle cx="15" cy="11" r="1" fill="currentColor"/><path d="M8 15c1.2 1.3 2.8 2 4 2s2.8-.7 4-2"/><path d="M5 19h14"/></svg>
+        <span class="btn-label">IA <span class="ai-beta-dot">β</span></span>
+      </button>
+      <div class="toolbar-divider"></div>
       <button id="btn-leave" class="toolbar-btn toolbar-btn-leave" title="Sair da sala">
         <svg class="tb-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><polyline points="16 17 21 12 16 7"/><line x1="21" y1="12" x2="9" y2="12"/></svg>
         <span class="btn-label">Sair</span>
@@ -320,7 +352,6 @@
 </div>
 
 <!-- Toast -->
-<div id="community-view" class="community-view hidden"></div>
 <div id="toast-container" class="toast-container"></div>
 
 <!-- Modal Esqueci a senha -->
@@ -495,6 +526,5 @@
 </div>
 
 <script src="/app.js"></script>
-  <script src="/community.js"></script>
 </body>
 </html>

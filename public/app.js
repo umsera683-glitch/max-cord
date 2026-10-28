@@ -34,13 +34,6 @@ let currentFacingMode = 'user';  // câmera frontal por padrão
 let streamQuality = 'high';      // qualidade padrão
 let pendingStreamType = null;    // 'screen' | 'camera' — aguardando modal de qualidade
 
-// Presets de qualidade da transmissão (definidos cedo para uso em getDisplayMedia / câmera)
-const QUALITY_PRESETS = {
-  high:   { width: 1920, height: 1080, frameRate: 30, bitrate: 2500000 },
-  medium: { width: 1280, height: 720,  frameRate: 30, bitrate: 1200000 },
-  low:    { width: 854,  height: 480,  frameRate: 15, bitrate:  500000 }
-};
-
 // Estado do chat
 let chatUnread = 0;
 let chatOpen = false;
@@ -58,34 +51,9 @@ const participants = new Map();
 // tileId -> element
 const tiles = new Map();
 
-// Volume por peer (0–1 UI). Soft-max evita estouro. Persistido por apelido.
+// Volume por peer (0–1). Default 1. Usado no clique direito / long-press
 const peerVolumes = new Map();
-const VOLUME_SOFT_MAX = 0.82;
 let tileContextMenuEl = null;
-function peerVolumeStorageKey(peerId) {
-  const p = participants.get(peerId);
-  const name = p && p.name ? String(p.name).trim().toLowerCase() : '';
-  return name ? ('mc_peer_vol_v1_' + name) : null;
-}
-function loadSavedPeerVolume(peerId) {
-  const key = peerVolumeStorageKey(peerId);
-  if (!key) return null;
-  try {
-    const raw = localStorage.getItem(key);
-    if (raw === null || raw === '') return null;
-    const n = parseFloat(raw);
-    if (Number.isFinite(n)) return Math.max(0, Math.min(1, n));
-  } catch (_) {}
-  return null;
-}
-function savePeerVolume(peerId, vol) {
-  const key = peerVolumeStorageKey(peerId);
-  if (!key) return;
-  try { localStorage.setItem(key, String(vol)); } catch (_) {}
-}
-function uiVolToElement(vol) {
-  return Math.max(0, Math.min(1, (Number(vol) || 0) * VOLUME_SOFT_MAX));
-}
 
 // Canvas compositor
 let compositeCanvas = null;
@@ -98,37 +66,31 @@ let compRAF = null;
 // ==================== ICE CONFIG ====================
 // STUN: descobre o IP público do usuário
 // TURN: retransmite o mídia quando conexão direta falha (NAT/firewall)
-// Múltiplos STUN + Open Relay (gratuito) para maximizar chance de conexão em qualquer rede/navegador
+// Open Relay Project — gratuito, sem cadastro
 
 const ICE_CONFIG = {
   iceServers: [
     { urls: 'stun:stun.l.google.com:19302' },
     { urls: 'stun:stun1.l.google.com:19302' },
-    { urls: 'stun:stun2.l.google.com:19302' },
-    { urls: 'stun:stun3.l.google.com:19302' },
-    { urls: 'stun:stun4.l.google.com:19302' },
     { urls: 'stun:stun.cloudflare.com:3478' },
-    { urls: 'stun:stun.stunprotocol.org:3478' },
     {
       urls: [
         'turn:openrelay.metered.ca:80',
         'turn:openrelay.metered.ca:443',
-        'turn:openrelay.metered.ca:443?transport=tcp',
-        'turns:openrelay.metered.ca:443'
+        'turn:openrelay.metered.ca:443?transport=tcp'
       ],
       username: 'openrelayproject',
       credential: 'openrelayproject'
     }
   ],
-  iceCandidatePoolSize: 10,
+  iceCandidatePoolSize: 4,
   iceTransportPolicy: 'all',
   bundlePolicy: 'max-bundle',
   rtcpMuxPolicy: 'require'
 };
 
 function shouldOffer(peerId) {
-  const me = myId || (socket && socket.id) || '';
-  return !!(me && peerId && me < peerId);
+  return !!(myId && peerId && myId < peerId);
 }
 
 // ==================== UTILITÁRIOS ====================
@@ -161,27 +123,6 @@ function isMobile() {
   return /Android|iPhone|iPad|iPod/i.test(navigator.userAgent) || window.innerWidth < 640;
 }
 
-// Desbloqueia autoplay de áudio/vídeo após primeiro gesto do usuário (política de browsers desktop)
-let audioUnlocked = false;
-function unlockAudioPlayback() {
-  if (audioUnlocked) return;
-  audioUnlocked = true;
-  try {
-    document.querySelectorAll('audio, video').forEach(el => {
-      if (el.paused) el.play().catch(() => {});
-    });
-    if (typeof noiseCtx !== 'undefined' && noiseCtx && noiseCtx.state === 'suspended') {
-      noiseCtx.resume().catch(() => {});
-    }
-    if (window._mergeAudioCtx && window._mergeAudioCtx.state === 'suspended') {
-      window._mergeAudioCtx.resume().catch(() => {});
-    }
-  } catch (_) {}
-}
-['click', 'touchstart', 'keydown'].forEach(ev => {
-  document.addEventListener(ev, unlockAudioPlayback, { once: true, passive: true });
-});
-
 function supportsScreenShare() {
   return !!(navigator.mediaDevices && navigator.mediaDevices.getDisplayMedia);
 }
@@ -191,267 +132,39 @@ function loadName()  { try { return localStorage.getItem('sh_username') || ''; }
 function savePhoto(url) { try { localStorage.setItem('sh_photo', url); } catch (_) {} }
 function loadPhoto()    { try { return localStorage.getItem('sh_photo') || ''; } catch (_) { return ''; } }
 
-/** HTML seguro do avatar (foto/GIF ou inicial). Usado em lista, chat e tiles. */
-function avatarHtml(name, photoUrl, sizeClass) {
-  const col = nameColor(name || '?');
-  const init = nameInitial(name || '?');
-  const cls = sizeClass || 'avatar-sm';
-  if (photoUrl && typeof photoUrl === 'string' && photoUrl.length > 10) {
-    // Escapa aspas no src para não quebrar o HTML
-    const safeSrc = photoUrl.replace(/"/g, '&quot;');
-    return `<div class="avatar ${cls}" style="background:transparent;padding:0;overflow:hidden">
-      <img src="${safeSrc}" alt="${init}"
-        style="width:100%;height:100%;object-fit:cover;border-radius:50%;display:block"
-        onerror="this.style.display='none';this.parentElement.style.background='linear-gradient(135deg,${col},${col}88)';this.parentElement.textContent='${init}';">
-    </div>`;
-  }
-  return `<div class="avatar ${cls}" style="background:linear-gradient(135deg,${col},${col}88)">${init}</div>`;
-}
-function loadUserId() {
-  try {
-    let id = localStorage.getItem('sh_userid');
-    if (!id) { id = 'u_' + Math.random().toString(36).slice(2) + Date.now().toString(36); localStorage.setItem('sh_userid', id); }
-    return id;
-  } catch (_) { return 'u_' + Math.random().toString(36).slice(2); }
-}
-/** Comprime imagem/GIF para caber no socket (~400KB). GIF animado só se já for pequeno. */
-function compressImageFile(file, maxBytes, maxDim) {
-  maxBytes = maxBytes || 400000; maxDim = maxDim || 256;
-  return new Promise((resolve, reject) => {
-    if (file.type === 'image/gif' && file.size <= maxBytes) {
-      const r = new FileReader();
-      r.onload = () => resolve(r.result);
-      r.onerror = reject;
-      r.readAsDataURL(file);
-      return;
-    }
-    const reader = new FileReader();
-    reader.onerror = reject;
-    reader.onload = () => {
-      const img = new Image();
-      img.onload = () => {
-        let w = img.width, h = img.height;
-        const scale = Math.min(1, maxDim / Math.max(w, h || 1));
-        w = Math.max(1, Math.round(w * scale)); h = Math.max(1, Math.round(h * scale));
-        const canvas = document.createElement('canvas');
-        canvas.width = w; canvas.height = h;
-        canvas.getContext('2d').drawImage(img, 0, 0, w, h);
-        let q = 0.9, data = canvas.toDataURL('image/jpeg', q);
-        while (data.length > maxBytes && q > 0.35) { q -= 0.08; data = canvas.toDataURL('image/jpeg', q); }
-        resolve(data);
-      };
-      img.onerror = reject;
-      img.src = reader.result;
-    };
-    reader.readAsDataURL(file);
-  });
-}
-window.compressImageFile = compressImageFile;
-
-/** Modal interno do site (substitui prompt/alert nativos) */
-function mcPrompt(title, placeholder, defaultValue) {
-  return new Promise((resolve) => {
-    const old = document.getElementById('mc-site-modal');
-    if (old) old.remove();
-    const wrap = document.createElement('div');
-    wrap.id = 'mc-site-modal';
-    wrap.innerHTML = `<div class="mc-modal-backdrop"><div class="mc-modal-box" role="dialog">
-      <h3 class="mc-modal-title"></h3>
-      <input class="mc-modal-input" maxlength="80" />
-      <div class="mc-modal-actions">
-        <button type="button" class="mc-modal-cancel">Cancelar</button>
-        <button type="button" class="mc-modal-ok">OK</button>
-      </div>
-    </div></div>`;
-    document.body.appendChild(wrap);
-    wrap.querySelector('.mc-modal-title').textContent = title || 'Digite';
-    const input = wrap.querySelector('.mc-modal-input');
-    input.placeholder = placeholder || '';
-    input.value = defaultValue || '';
-    const close = (val) => { wrap.remove(); resolve(val); };
-    wrap.querySelector('.mc-modal-cancel').onclick = () => close(null);
-    wrap.querySelector('.mc-modal-ok').onclick = () => close(input.value);
-    wrap.querySelector('.mc-modal-backdrop').addEventListener('click', (e) => { if (e.target === e.currentTarget) close(null); });
-    input.addEventListener('keydown', (e) => {
-      if (e.key === 'Enter') { e.preventDefault(); close(input.value); }
-      if (e.key === 'Escape') close(null);
-    });
-    setTimeout(() => input.focus(), 30);
-  });
-}
-function mcConfirm(title, message) {
-  return new Promise((resolve) => {
-    const old = document.getElementById('mc-site-modal');
-    if (old) old.remove();
-    const wrap = document.createElement('div');
-    wrap.id = 'mc-site-modal';
-    wrap.innerHTML = `<div class="mc-modal-backdrop"><div class="mc-modal-box" role="dialog">
-      <h3 class="mc-modal-title"></h3>
-      <p class="mc-modal-msg"></p>
-      <div class="mc-modal-actions">
-        <button type="button" class="mc-modal-cancel">Cancelar</button>
-        <button type="button" class="mc-modal-ok">OK</button>
-      </div>
-    </div></div>`;
-    document.body.appendChild(wrap);
-    wrap.querySelector('.mc-modal-title').textContent = title || 'Confirmar';
-    wrap.querySelector('.mc-modal-msg').textContent = message || '';
-    const close = (val) => { wrap.remove(); resolve(val); };
-    wrap.querySelector('.mc-modal-cancel').onclick = () => close(false);
-    wrap.querySelector('.mc-modal-ok').onclick = () => close(true);
-    wrap.querySelector('.mc-modal-backdrop').addEventListener('click', (e) => { if (e.target === e.currentTarget) close(false); });
-  });
-}
-window.mcPrompt = mcPrompt;
-window.mcConfirm = mcConfirm;
-
-/** Som curto de notificação (join / mensagem) */
-function playNotifySound(kind) {
-  try {
-    const ctx = new (window.AudioContext || window.webkitAudioContext)();
-    const o = ctx.createOscillator();
-    const g = ctx.createGain();
-    o.type = 'sine';
-    o.frequency.value = kind === 'message' ? 880 : 660;
-    g.gain.value = 0.0001;
-    o.connect(g); g.connect(ctx.destination);
-    const t = ctx.currentTime;
-    g.gain.exponentialRampToValueAtTime(0.08, t + 0.02);
-    g.gain.exponentialRampToValueAtTime(0.0001, t + 0.18);
-    o.start(t); o.stop(t + 0.2);
-    setTimeout(() => { try { ctx.close(); } catch (_) {} }, 300);
-  } catch (_) {}
-}
-window.playNotifySound = playNotifySound;
-
-
 // ==================== SOCKET ====================
 
-function getSocketUrl() {
-  try {
-    if (window.SOCKET_URL) return window.SOCKET_URL;
-  } catch (_) {}
-  return location.origin;
-}
-
 function connectSocket() {
-  window.connectSocket = connectSocket;
-  return new Promise((resolve) => {
-    // Já conectado
-    if (socket && socket.connected) {
-      window.socket = socket;
-      myId = socket.id;
-      return resolve(true);
-    }
+  return new Promise(resolve => {
+    if (socket && socket.connected) return resolve(true);
 
-    const url = getSocketUrl();
-
-    // Cria o socket uma única vez (ou recria se estiver destruído)
     if (!socket) {
-      socket = io(url, {
-        // polling primeiro = mais estável no Render / proxies
-        transports: ['polling', 'websocket'],
-        upgrade: true,
-        reconnection: true,
-        reconnectionAttempts: 15,
-        reconnectionDelay: 700,
+      socket = io(window.SOCKET_URL || location.origin, {
+        transports: ['websocket', 'polling'],
+        reconnectionAttempts: 8,
+        reconnectionDelay: 800,
         reconnectionDelayMax: 4000,
-        timeout: 15000,
-        autoConnect: true,
-        forceNew: false
+        timeout: 8000
       });
-      socketListenersBound = false;
       setupSocketListeners();
       setupChatListeners();
-      window.socket = socket;
-    } else if (!socket.connected) {
-      // Tenta reconectar o socket existente
-      try { socket.connect(); } catch (_) {}
     }
 
-    if (socket.connected) {
-      myId = socket.id;
-      window.socket = socket;
-      return resolve(true);
-    }
-
-    let settled = false;
-    const finish = (ok) => {
-      if (settled) return;
-      settled = true;
-      try {
-        socket.off('connect', onOk);
-        socket.off('connect_error', onErr);
-      } catch (_) {}
-      resolve(!!ok);
-    };
-
-    const onOk = () => {
-      myId = socket.id;
-      window.socket = socket;
-      finish(true);
-    };
+    const onOk = () => { myId = socket.id; cleanup(); resolve(true); };
     const onErr = (err) => {
-      console.warn('Socket connect_error:', err && err.message, 'url=', url);
+      console.warn('Socket connect_error:', err && err.message);
+      cleanup();
+      resolve(!!socket.connected);
     };
-
+    const cleanup = () => {
+      socket.off('connect', onOk);
+      socket.off('connect_error', onErr);
+    };
     socket.on('connect', onOk);
     socket.on('connect_error', onErr);
-
-    // Aviso de hibernação do Render
-    const wakeToast = setTimeout(() => {
-      if (!settled && socket && !socket.connected) {
-        showToast('Servidor iniciando... isso pode levar até 30s', 'info');
-      }
-    }, 3000);
-
-    // Timeout final
-    setTimeout(() => {
-      clearTimeout(wakeToast);
-      if (socket && socket.connected) finish(true);
-      else {
-        console.warn('Socket timeout:', url);
-        finish(false);
-      }
-    }, 30000);
+    if (socket.connected) onOk();
+    setTimeout(() => { if (!socket.connected) { cleanup(); resolve(false); } }, 8000);
   });
-}
-
-/** Emite evento com callback e timeout (não trava em "Conectando...") */
-function emitWithAck(event, data, timeoutMs) {
-  timeoutMs = timeoutMs || 12000;
-  return new Promise((resolve) => {
-    if (!socket || !socket.connected) {
-      resolve({ success: false, message: 'Sem conexão com o servidor.' });
-      return;
-    }
-    let done = false;
-    const timer = setTimeout(() => {
-      if (done) return;
-      done = true;
-      resolve({ success: false, message: 'Servidor demorou para responder. Tente de novo.' });
-    }, timeoutMs);
-    try {
-      socket.emit(event, data, (res) => {
-        if (done) return;
-        done = true;
-        clearTimeout(timer);
-        resolve(res || { success: false, message: 'Resposta vazia do servidor.' });
-      });
-    } catch (err) {
-      clearTimeout(timer);
-      resolve({ success: false, message: 'Erro ao enviar: ' + (err && err.message) });
-    }
-  });
-}
-
-function safePhotoForEmit() {
-  try {
-    const p = loadPhoto();
-    if (!p) return '';
-    if (p.length > 450000) return ''; // evita travar o socket com foto gigante
-    return p;
-  } catch (_) { return ''; }
 }
 
 // ==================== LISTENERS DO SOCKET ====================
@@ -462,25 +175,46 @@ function setupSocketListeners() {
 
   socket.on('user-joined', (data) => {
     if (!data || !data.id || data.id === myId) return;
-    // Garante myId atualizado
-    if (socket && socket.id) myId = socket.id;
     participants.set(data.id, {
-      name: data.name || 'Usuário',
-      isOwner: !!data.isOwner,
-      isBroadcasting: !!data.isBroadcasting,
-      broadcastType: data.broadcastType || null,
-      hasMic: !!data.hasMic,
-      micMuted: data.micMuted !== false,
+      name: data.name, isOwner: data.isOwner,
+      isBroadcasting: false, broadcastType: null, hasMic: false, micMuted: true,
       photoUrl: data.photoUrl || ''
     });
     updateParticipantCount();
     renderParticipantsList();
-    showToast(`${data.name || 'Alguém'} entrou na sala`, 'info');
-
-    // Mesh bidirecional imediato + reforços
-    ensureMeshWith(data.id);
-    setTimeout(() => ensureMeshWith(data.id), 400);
-    setTimeout(() => ensureMeshWith(data.id), 1500);
+    showToast(`${data.name} entrou na sala`, 'info');
+    const pc = connectToPeer(data.id);
+    // Se já estamos transmitindo (tela com som do sistema incluso), reenvia tudo
+    if (pc && (isScreenSharing || isCameraOn || getOutboundAudioTrack())) {
+      addLocalTracksToPeer(pc);
+      // Reaplica áudio da tela explicitamente (late joiner / reentrada)
+      const outA = getOutboundAudioTrack();
+      if (outA) replaceAudioTrackInPeer(pc, outA);
+      setTimeout(() => {
+        const entry = peers.get(data.id);
+        if (!entry || !entry.pc) return;
+        addLocalTracksToPeer(entry.pc);
+        const a2 = getOutboundAudioTrack();
+        if (a2) replaceAudioTrackInPeer(entry.pc, a2);
+        if (shouldOffer(data.id) && entry.pc.signalingState === 'stable') {
+          try {
+            entry.makingOffer = true;
+            entry.pc.createOffer().then(offer => {
+              return entry.pc.setLocalDescription(offer).then(() => {
+                if (socket) socket.emit('offer', { targetId: data.id, sdp: entry.pc.localDescription });
+              });
+            }).catch(() => {}).finally(() => { entry.makingOffer = false; });
+          } catch (_) {}
+        }
+      }, 400);
+      setTimeout(() => {
+        const entry = peers.get(data.id);
+        if (!entry || !entry.pc) return;
+        addLocalTracksToPeer(entry.pc);
+        const a3 = getOutboundAudioTrack();
+        if (a3) replaceAudioTrackInPeer(entry.pc, a3);
+      }, 1200);
+    }
   });
 
   socket.on('user-left', (data) => {
@@ -517,32 +251,12 @@ function setupSocketListeners() {
     setTimeout(() => leaveRoom(false), 1500);
   });
 
-  // Receber foto de perfil de outro participante
+  // Receber foto de perfil de outro participante (enviada diretamente, não via servidor)
   socket.on('photo-share', (data) => {
-    if (!data || !data.id) return;
     const p = participants.get(data.id);
     if (p && data.photoUrl) {
       p.photoUrl = data.photoUrl;
       renderParticipantsList();
-      // Atualiza avatar nos tiles de vídeo/mic se já existirem
-      const vTile = document.getElementById(data.id + '-video');
-      if (vTile) {
-        const type = p.broadcastType || 'screen';
-        updateTileLabel(vTile, p.name, type, data.photoUrl);
-      }
-      const mTile = document.getElementById(data.id + '-mic');
-      if (mTile) {
-        const col = nameColor(p.name);
-        const micAv = mTile.querySelector('.mic-avatar');
-        if (micAv && data.photoUrl) {
-          const safe = String(data.photoUrl).replace(/"/g, '&quot;');
-          micAv.style.background = 'transparent';
-          micAv.style.padding = '0';
-          micAv.style.overflow = 'hidden';
-          micAv.innerHTML = `<img src="${safe}" alt="" style="width:100%;height:100%;object-fit:cover;border-radius:50%;display:block"
-            onerror="this.style.display='none';this.parentElement.style.background='linear-gradient(135deg,${col},${col}88)';this.parentElement.textContent='🎙️';">`;
-        }
-      }
     }
   });
 
@@ -555,53 +269,7 @@ function setupSocketListeners() {
   });
 
   socket.on('request-peer', ({ fromId }) => {
-    if (fromId && fromId !== myId) {
-      ensureMeshWith(fromId);
-      setTimeout(() => ensureMeshWith(fromId), 300);
-    }
-  });
-
-  // Lista oficial da sala — todos ficam com os mesmos participantes
-  socket.on('room-sync', (data) => {
-    if (!data || !Array.isArray(data.participants)) return;
-    // Aceita sync se já estamos na sala OU se o roomId bate com o que acabamos de entrar
-    const rid = data.roomId ? String(data.roomId).toUpperCase() : null;
-    if (rid && currentRoomId && rid !== String(currentRoomId).toUpperCase()) return;
-    // Se ainda não setamos currentRoomId mas o sync chegou (race do join), aplica mesmo assim
-    // e marca a sala para não perder a lista
-    if (!currentRoomId && rid) {
-      currentRoomId = rid;
-    }
-    if (socket && socket.id) myId = socket.id;
-
-    participants.clear();
-    (data.participants || []).forEach(p => {
-      if (!p || !p.id) return;
-      participants.set(p.id, {
-        name: p.name || 'Usuário',
-        isOwner: !!p.isOwner,
-        isBroadcasting: !!p.isBroadcasting,
-        broadcastType: p.broadcastType || null,
-        hasMic: !!p.hasMic,
-        micMuted: p.micMuted !== false,
-        photoUrl: p.photoUrl || ''
-      });
-    });
-    updateParticipantCount();
-    renderParticipantsList();
-
-    // Conecta mesh com TODOS os outros (não só os novos)
-    for (const [pid] of participants) {
-      if (!pid || pid === myId) continue;
-      ensureMeshWith(pid);
-    }
-    // Reforço após estabilizar signaling
-    setTimeout(() => {
-      for (const [pid] of participants) {
-        if (!pid || pid === myId) continue;
-        ensureMeshWith(pid);
-      }
-    }, 800);
+    if (fromId && fromId !== myId) connectToPeer(fromId);
   });
 
   socket.on('disconnect', (reason) => {
@@ -647,51 +315,8 @@ function pcIsUsable(pc) {
   return cs !== 'closed' && cs !== 'failed' && pc.signalingState !== 'closed';
 }
 
-/**
- * Garante conexão mesh com um peer: cria PC se necessário, pede sinalização
- * e injeta tracks locais (mic/câmera/tela) para os dois lados se ouvirem e se verem.
- */
-function ensureMeshWith(peerId) {
-  if (!peerId || peerId === myId) return;
-  if (socket && socket.id) myId = socket.id;
-  if (peerId === myId) return;
-
-  const pc = connectToPeer(peerId);
-  if (socket) {
-    try { socket.emit('request-peer', { targetId: peerId }); } catch (_) {}
-  }
-  if (!pc) return;
-
-  addLocalTracksToPeer(pc);
-  const outA = getOutboundAudioTrack();
-  if (outA) replaceAudioTrackInPeer(pc, outA);
-  const outV = getCurrentVideoTrack();
-  if (outV) replaceVideoTrackInPeer(pc, outV);
-
-  // Se somos o offerer e a conexão está estável, força offer para estabelecer canais
-  const entry = peers.get(peerId);
-  if (entry && entry.pc && shouldOffer(peerId) && entry.pc.signalingState === 'stable' && !entry.makingOffer) {
-    try {
-      entry.makingOffer = true;
-      entry.pc.createOffer()
-        .then(offer => entry.pc.setLocalDescription(offer))
-        .then(() => {
-          if (socket && entry.pc.localDescription) {
-            socket.emit('offer', { targetId: peerId, sdp: entry.pc.localDescription });
-          }
-        })
-        .catch(() => {})
-        .finally(() => { entry.makingOffer = false; });
-    } catch (_) {
-      entry.makingOffer = false;
-    }
-  }
-}
-
 function connectToPeer(peerId) {
   if (!peerId || peerId === myId) return null;
-  if (socket && socket.id && !myId) myId = socket.id;
-  if (peerId === myId) return null;
   const entry = getPeerEntry(peerId);
   if (pcIsUsable(entry.pc)) {
     addLocalTracksToPeer(entry.pc);
@@ -708,15 +333,6 @@ function createPeerConnection(peerId) {
   entry.pc = pc;
   entry.makingOffer = false;
   entry.ignoreOffer = false;
-
-  // DataChannel força negociação mesmo sem câmera/mic (mesh sempre ativo)
-  try {
-    if (shouldOffer(peerId)) {
-      entry._dc = pc.createDataChannel('mesh', { ordered: true });
-    } else {
-      pc.ondatachannel = (ev) => { entry._dc = ev.channel; };
-    }
-  } catch (_) {}
 
   pc.onicecandidate = (e) => {
     if (e.candidate && socket) {
@@ -837,16 +453,10 @@ async function optimizeVideoSender(sender) {
     if (!params.encodings || !params.encodings.length) params.encodings = [{}];
     const n = Math.max(1, peers.size);
     const isScreen = isScreenSharing;
-    const q = QUALITY_PRESETS[streamQuality] || QUALITY_PRESETS.high;
-    const baseBitrate = q.bitrate;
-    const peerScale = Math.max(0.5, 1 / Math.sqrt(n));
-    // scaleResolutionDownBy: browsers respeitam de forma confiável (1 = full, 2 = metade)
-    let down = 1;
-    if (streamQuality === 'medium') down = isScreen ? 1.5 : 1.25;
-    if (streamQuality === 'low') down = isScreen ? 2.5 : 2;
-    params.encodings[0].scaleResolutionDownBy = down;
-    params.encodings[0].maxBitrate = Math.round(baseBitrate * peerScale);
-    params.encodings[0].maxFramerate = q.frameRate;
+    params.encodings[0].maxBitrate = isScreen
+      ? Math.round(Math.min(2_500_000, Math.max(700_000, 2_200_000 / Math.sqrt(n))))
+      : Math.round(Math.min(1_200_000, Math.max(350_000, 900_000 / Math.sqrt(n))));
+    params.encodings[0].maxFramerate = isScreen ? 24 : 24;
     params.degradationPreference = isScreen ? 'maintain-resolution' : 'balanced';
     await sender.setParameters(params);
   } catch (_) {}
@@ -991,7 +601,6 @@ function ensureRemoteAudioElement(peerId, stream) {
     audio.autoplay = true;
     audio.playsInline = true;
     audio.setAttribute('playsinline', '');
-    audio.setAttribute('webkit-playsinline', '');
     audio.style.display = 'none';
     document.body.appendChild(audio);
   }
@@ -1004,18 +613,7 @@ function ensureRemoteAudioElement(peerId, stream) {
     audio.srcObject = stream;
   }
   applyPeerVolume(peerId);
-  // Tenta play; se autoplay bloqueado, unlockAudioPlayback vai retentar no próximo gesto
-  const p = audio.play();
-  if (p && typeof p.catch === 'function') {
-    p.catch(() => {
-      // Marca para retentar quando o usuário interagir
-      if (!audioUnlocked) {
-        const retry = () => { audio.play().catch(() => {}); };
-        document.addEventListener('click', retry, { once: true });
-        document.addEventListener('touchstart', retry, { once: true });
-      }
-    });
-  }
+  audio.play().catch(() => {});
 }
 
 function removeRemoteAudioElement(peerId) {
@@ -1032,22 +630,21 @@ function isPeerMuted(peerId) {
 }
 
 function getPeerVolume(peerId) {
-  if (peerVolumes.has(peerId)) return peerVolumes.get(peerId);
-  const saved = loadSavedPeerVolume(peerId);
-  if (saved !== null) { peerVolumes.set(peerId, saved); return saved; }
-  return 1;
+  const v = peerVolumes.get(peerId);
+  return v === undefined ? 1 : v;
 }
+
 function setPeerVolume(peerId, vol) {
   vol = Math.max(0, Math.min(1, Number(vol) || 0));
   peerVolumes.set(peerId, vol);
-  savePeerVolume(peerId, vol);
   applyPeerVolume(peerId);
 }
+
 function applyPeerVolume(peerId) {
   const vol = getPeerVolume(peerId);
   const mutedGlobally = isAudioMuted;
   const effectiveMuted = mutedGlobally || vol <= 0;
-  const effectiveVol = mutedGlobally ? 0 : uiVolToElement(vol);
+  const effectiveVol = mutedGlobally ? 0 : vol;
 
   const videoTile = document.getElementById(`${peerId}-video`);
   if (videoTile) {
@@ -1135,7 +732,7 @@ function bindVideoPlayback(video, stream, peerId) {
     video.muted = true;
   } else {
     const vol = getPeerVolume(peerId);
-    video.volume = isAudioMuted ? 0 : uiVolToElement(vol);
+    video.volume = isAudioMuted ? 0 : vol;
     video.muted = isAudioMuted || vol <= 0;
     // Áudio dedicado reforça a escuta (especialmente quem entra depois)
     if (stream.getAudioTracks().length) {
@@ -1223,8 +820,7 @@ function upsertVideoTile(peerId, stream) {
     tile.id = tileId;
     tile.className = 'stream-tile type-screen';
     tile.dataset.peerId = peerId;
-    tile.addEventListener('dblclick', (e) => { e.preventDefault(); e.stopPropagation(); makeTileFullscreen(tile); });
-    (function(t){ let last=0; t.addEventListener('touchend',(e)=>{ const n=Date.now(); if(n-last<300){ e.preventDefault(); makeTileFullscreen(t); last=0;} else last=n; },{passive:false}); })(tile);
+    tile.addEventListener('click', () => makeTileFullscreen(tile));
     // Clique direito / long-press = volume desta transmissão
     attachTileVolumeControls(tile, peerId);
 
@@ -1283,20 +879,8 @@ function upsertAudioTile(peerId, stream, name) {
   tile.id = tileId;
   tile.className = 'stream-tile audio-only';
   tile.dataset.peerId = peerId;
-  const p = participants.get(peerId);
-  const url = peerId === myId ? loadPhoto() : (p && p.photoUrl) || '';
-  let micAv;
-  if (url && url.length > 10) {
-    const safe = String(url).replace(/"/g, '&quot;');
-    micAv = `<div class="mic-avatar" style="background:transparent;padding:0;overflow:hidden">
-      <img src="${safe}" alt="" style="width:100%;height:100%;object-fit:cover;border-radius:50%;display:block"
-        onerror="this.style.display='none';this.parentElement.style.background='linear-gradient(135deg,${col},${col}88)';this.parentElement.textContent='🎙️';">
-    </div>`;
-  } else {
-    micAv = `<div class="mic-avatar" style="background:linear-gradient(135deg,${col},${col}88)">🎙️</div>`;
-  }
   tile.innerHTML = `
-    ${micAv}
+    <div class="mic-avatar" style="background:linear-gradient(135deg,${col},${col}88)">🎙️</div>
     <div class="mic-name">${name}</div>
   `;
   attachTileVolumeControls(tile, peerId);
@@ -1305,7 +889,7 @@ function upsertAudioTile(peerId, stream, name) {
   audio.autoplay = true;
   audio.srcObject = stream;
   audio.muted = isAudioMuted || isPeerMuted(peerId);
-  audio.volume = uiVolToElement(getPeerVolume(peerId));
+  audio.volume = getPeerVolume(peerId);
   audio.style.display = 'none';
   tile.appendChild(audio);
   audio.play().catch(() => {});
@@ -1319,26 +903,13 @@ function upsertAudioTile(peerId, stream, name) {
   applyPeerVolume(peerId);
 }
 
-function updateTileLabel(tile, name, type, photoUrl) {
+function updateTileLabel(tile, name, type) {
   const label = tile.querySelector('.stream-tile-label');
   if (!label) return;
   const col = nameColor(name);
   const icon = type === 'camera' ? '📹' : '🖥️';
-  const peerId = tile.dataset.peerId || '';
-  const p = participants.get(peerId);
-  const url = photoUrl || (peerId === myId ? loadPhoto() : (p && p.photoUrl)) || '';
-  let av;
-  if (url && url.length > 10) {
-    const safe = String(url).replace(/"/g, '&quot;');
-    av = `<div class="tile-avatar" style="background:transparent;padding:0;overflow:hidden">
-      <img src="${safe}" alt="" style="width:100%;height:100%;object-fit:cover;border-radius:50%;display:block"
-        onerror="this.style.display='none';this.parentElement.style.background='linear-gradient(135deg,${col},${col}88)';this.parentElement.textContent='${nameInitial(name)}';">
-    </div>`;
-  } else {
-    av = `<div class="tile-avatar" style="background:linear-gradient(135deg,${col},${col}88)">${nameInitial(name)}</div>`;
-  }
   label.innerHTML = `
-    ${av}
+    <div class="tile-avatar" style="background:linear-gradient(135deg,${col},${col}88)">${nameInitial(name)}</div>
     <span class="tile-name">${name}</span>
     <span class="tile-type-badge">${icon}</span>
   `;
@@ -1380,23 +951,14 @@ function checkNoStream() {
 }
 
 function makeTileFullscreen(tile) {
-  if (!tile) return;
-  const video = tile.querySelector && tile.querySelector('video');
-  const target = video || tile;
-  try {
-    if (document.fullscreenElement === target || document.webkitFullscreenElement === target) {
-      const exit = document.exitFullscreen || document.webkitExitFullscreen;
-      if (exit) exit.call(document);
-      return;
-    }
-  } catch (_) {}
-  const req = target.requestFullscreen || target.webkitRequestFullscreen || target.msRequestFullscreen;
-  if (req) {
-    req.call(target).catch(() => {
-      // fallback: try tile
-      const r2 = tile.requestFullscreen || tile.webkitRequestFullscreen;
-      if (r2) r2.call(tile).catch(() => {});
-    });
+  const isFs = document.fullscreenElement || document.webkitFullscreenElement;
+  if (!isFs) {
+    const video = tile.querySelector('video');
+    if (video && video.webkitEnterFullscreen) { video.webkitEnterFullscreen(); return; }
+    const req = tile.requestFullscreen || tile.webkitRequestFullscreen;
+    if (req) req.call(tile).catch(() => {});
+  } else {
+    (document.exitFullscreen || document.webkitExitFullscreen || (() => {})).call(document);
   }
 }
 
@@ -1528,20 +1090,46 @@ function pushOutboundAudioToAllPeers() {
 
 // ==================== MÍDIA LOCAL ====================
 
+// Constraints de microfone otimizadas para mobile e desktop
+function getMicConstraints() {
+  return {
+    audio: {
+      echoCancellation:   noiseSuppressionOn,
+      noiseSuppression:   noiseSuppressionOn,
+      autoGainControl:    noiseSuppressionOn,
+      channelCount:       1,
+      sampleRate:         48000,
+      sampleSize:         16
+    },
+    video: false
+  };
+}
+
 async function startMic() {
   if (micStream) return true;
   try {
+    // Carregar RNNoise em background na primeira vez que o mic é usado
+    if (!rnnoiseReady) loadRNNoise();
+
     const raw = await navigator.mediaDevices.getUserMedia(getMicConstraints());
     micStream = raw;
     isMicOn = true;
-    if (socket) socket.emit('mic-update', { hasMic: true, micMuted: false });
-    let outStream = raw;
-    if (noiseSuppressionOn) outStream = await applyNoiseSuppression(raw);
-    const trackToSend = outStream.getAudioTracks()[0] || raw.getAudioTracks()[0];
+    socket.emit('mic-update', { hasMic: true, micMuted: false });
+
+    let trackToSend = raw.getAudioTracks()[0];
+
+    // Se RNNoise já carregou e supressão está ligada, aplicar pipeline
+    if (noiseSuppressionOn && rnnoiseReady) {
+      const processed = await applyRNNoise(raw);
+      trackToSend = processed.getAudioTracks()[0] || trackToSend;
+    }
+
+    // Se NÃO está compartilhando tela, o mic é o áudio de saída
     if (!isScreenSharing) {
-      setOutboundAudioTrack(trackToSend, outStream);
+      setOutboundAudioTrack(trackToSend, micStream);
       pushOutboundAudioToAllPeers();
     } else {
+      // Tela ativa: mantém outbound da tela; peers já recebem via getOutboundAudioTrack
       for (const [, entry] of peers) {
         if (entry.pc) replaceAudioTrackInPeer(entry.pc, getOutboundAudioTrack() || trackToSend);
       }
@@ -1551,12 +1139,10 @@ async function startMic() {
     try {
       micStream = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
       isMicOn = true;
-      if (socket) socket.emit('mic-update', { hasMic: true, micMuted: false });
-      let outStream = micStream;
-      if (noiseSuppressionOn) outStream = await applyNoiseSuppression(micStream);
-      const track = outStream.getAudioTracks()[0];
+      socket.emit('mic-update', { hasMic: true, micMuted: false });
+      const track = micStream.getAudioTracks()[0];
       if (!isScreenSharing) {
-        setOutboundAudioTrack(track, outStream);
+        setOutboundAudioTrack(track, micStream);
         pushOutboundAudioToAllPeers();
       } else {
         for (const [, entry] of peers) {
@@ -1574,7 +1160,7 @@ async function startMic() {
 
 async function stopMic() {
   if (!micStream) return;
-  destroyNoisePipeline();
+  destroyRNNoise();
   micStream.getTracks().forEach(t => t.stop());
   micStream = null;
   isMicOn = false;
@@ -1689,75 +1275,13 @@ async function stopCamera() {
   showToast('Câmera desligada', 'info');
 }
 
-/** Inverte câmera frontal ↔ traseira (mobile). Para tracks e readquire com facingMode oposto. */
-async function flipCamera() {
-  if (!isCameraOn || !isMobile()) return;
-  const btn = document.getElementById('btn-flip-camera');
-  if (btn) { btn.disabled = true; btn.style.opacity = '0.6'; }
-
-  const prevFacing = currentFacingMode;
-  currentFacingMode = currentFacingMode === 'user' ? 'environment' : 'user';
-
-  try {
-    // Para tracks antigas antes de pedir nova mídia (evita conflito de dispositivo em alguns browsers)
-    if (cameraStream) {
-      cameraStream.getTracks().forEach(t => { try { t.stop(); } catch (_) {} });
-      cameraStream = null;
-    }
-
-    const q = QUALITY_PRESETS[streamQuality] || QUALITY_PRESETS.high;
-    const constraints = {
-      video: {
-        facingMode: { ideal: currentFacingMode },
-        width:     { ideal: Math.min(q.width, 1280) },
-        height:    { ideal: Math.min(q.height, 720) },
-        frameRate: { ideal: q.frameRate }
-      },
-      audio: false
-    };
-
-    cameraStream = await navigator.mediaDevices.getUserMedia(constraints);
-    isCameraOn = true;
-
-    // Atualiza preview local e peers (composite se tela+câmera)
-    if (isScreenSharing && isCameraOn) {
-      stopComposite();
-      startComposite();
-    }
-    const track = getCurrentVideoTrack();
-    if (track) {
-      try { track.contentHint = 'motion'; } catch (_) {}
-      broadcastVideoTrack(track);
-    }
-    updateSelfPreview();
-    updateToolbarUI();
-    showToast(currentFacingMode === 'user' ? 'Câmera frontal' : 'Câmera traseira', 'success');
-  } catch (err) {
-    console.error('Flip camera error:', err);
-    // Reverte facingMode se falhou
-    currentFacingMode = prevFacing;
-    // Tenta recuperar a câmera anterior
-    try {
-      await startCamera();
-    } catch (_) {
-      isCameraOn = false;
-      const flipBtn = document.getElementById('btn-flip-camera');
-      if (flipBtn) flipBtn.classList.add('hidden');
-      showToast('Não foi possível virar a câmera', 'error');
-    }
-  } finally {
-    if (btn) { btn.disabled = false; btn.style.opacity = ''; }
-  }
-}
-
 async function acquireDisplayMedia() {
-  const q = QUALITY_PRESETS[streamQuality] || QUALITY_PRESETS.high;
   const attempts = [
     {
       video: {
-        frameRate: { ideal: q.frameRate, max: Math.max(q.frameRate, 30) },
-        width: { ideal: q.width, max: q.width },
-        height: { ideal: q.height, max: q.height }
+        frameRate: { ideal: 24, max: 30 },
+        width: { ideal: 1920, max: 1920 },
+        height: { ideal: 1080, max: 1080 }
       },
       audio: true,
       systemAudio: 'include',
@@ -1765,15 +1289,7 @@ async function acquireDisplayMedia() {
       surfaceSwitching: 'include',
       monitorTypeSurfaces: 'include'
     },
-    {
-      video: {
-        frameRate: { ideal: q.frameRate },
-        width: { ideal: q.width },
-        height: { ideal: q.height }
-      },
-      audio: true
-    },
-    { video: { frameRate: { ideal: q.frameRate } }, audio: true },
+    { video: { frameRate: { ideal: 24 } }, audio: true },
     { video: true, audio: false }
   ];
   let lastErr;
@@ -1802,15 +1318,6 @@ async function startScreenShare() {
     const videoTrack = screenStream.getVideoTracks()[0];
     if (videoTrack) {
       try { videoTrack.contentHint = 'detail'; } catch (_) {}
-      // Tentar aplicar a qualidade escolhida (frameRate/resolução quando o browser permitir)
-      try {
-        const q = QUALITY_PRESETS[streamQuality] || QUALITY_PRESETS.high;
-        await videoTrack.applyConstraints({
-          frameRate: { ideal: q.frameRate, max: Math.max(q.frameRate, 30) },
-          width: { ideal: q.width, max: q.width },
-          height: { ideal: q.height, max: q.height }
-        });
-      } catch (_) {}
       videoTrack.onended = () => {
         if (isScreenSharing) stopScreenShare();
       };
@@ -2004,8 +1511,7 @@ function updateSelfPreview() {
     tile.id = tileId;
     tile.className = 'stream-tile type-camera';
     tile.dataset.peerId = myId;
-    tile.addEventListener('dblclick', (e) => { e.preventDefault(); e.stopPropagation(); makeTileFullscreen(tile); });
-    (function(t){ let last=0; t.addEventListener('touchend',(e)=>{ const n=Date.now(); if(n-last<300){ e.preventDefault(); makeTileFullscreen(t); last=0;} else last=n; },{passive:false}); })(tile);
+    tile.addEventListener('click', () => makeTileFullscreen(tile));
 
     const video = document.createElement('video');
     video.autoplay = true;
@@ -2069,7 +1575,6 @@ async function createRoom() {
   const roomId   = document.getElementById('create-room-id').value.trim().toUpperCase() || generateRoomId();
   const rName    = document.getElementById('create-room-name').value.trim();
   const password = document.getElementById('create-password').value.trim();
-  const btn = document.getElementById('btn-create-room');
 
   if (!rName) {
     showToast('Digite o nome da sala antes de criar', 'error');
@@ -2077,55 +1582,14 @@ async function createRoom() {
     return;
   }
 
-  if (btn) { btn.disabled = true; btn.style.opacity = '0.7'; }
+  if (!(await connectSocket())) return;
+  myName = name; saveName(name);
+  lastJoinPassword = password || '';
 
-  try {
-    showToast('Conectando ao servidor...', 'info');
-    const ok = await connectSocket();
-    if (!ok) {
-      showToast('Não conectou. Espere 20s (servidor acordando) e clique de novo.', 'error');
-      return;
-    }
-
-    myName = name; saveName(name);
-    lastJoinPassword = password || '';
-
-    showToast('Criando sala...', 'info');
-    const res = await emitWithAck('create-room', {
-      roomId,
-      roomName: rName,
-      password,
-      userName: name,
-      photoUrl: safePhotoForEmit()
-    }, 15000);
-
-    if (res && res.success) {
-      isOwner = true;
-      if (socket && socket.id) myId = socket.id;
-      // currentRoomId cedo — evita race com room-sync
-      currentRoomId = String(res.roomId || roomId).toUpperCase();
-      participants.clear();
-      (res.participants || [{
-        id: myId, name: name, isOwner: true,
-        isBroadcasting: false, broadcastType: null, hasMic: false, micMuted: true,
-        photoUrl: safePhotoForEmit()
-      }]).forEach(p => {
-        if (p && p.id) participants.set(p.id, {
-          name: p.name, isOwner: p.isOwner,
-          isBroadcasting: !!p.isBroadcasting, broadcastType: p.broadcastType || null,
-          hasMic: !!p.hasMic, micMuted: p.micMuted !== false, photoUrl: p.photoUrl || ''
-        });
-      });
-      enterRoom(res.roomId || roomId, rName || res.roomName, true);
-    } else {
-      showToast((res && res.message) || 'Erro ao criar sala', 'error');
-    }
-  } catch (err) {
-    console.error(err);
-    showToast('Erro inesperado ao criar sala', 'error');
-  } finally {
-    if (btn) { btn.disabled = false; btn.style.opacity = ''; }
-  }
+  socket.emit('create-room', { roomId, roomName: rName, password, userName: name, photoUrl: loadPhoto() }, (res) => {
+    if (res.success) { isOwner = true; enterRoom(res.roomId, rName, true); }
+    else showToast(res.message, 'error');
+  });
 }
 
 async function joinRoom(roomId, password) {
@@ -2133,77 +1597,41 @@ async function joinRoom(roomId, password) {
   roomId   = roomId   !== undefined ? roomId   : document.getElementById('join-room-id').value.trim().toUpperCase();
   password = password !== undefined ? password : document.getElementById('join-password').value.trim();
   if (!roomId) { showToast('Digite o ID da sala', 'error'); return; }
-  const btn = document.getElementById('btn-join-room');
-  if (btn) { btn.disabled = true; btn.style.opacity = '0.7'; }
 
-  try {
-    showToast('Conectando ao servidor...', 'info');
-    const ok = await connectSocket();
-    if (!ok) {
-      showToast('Não conectou. Espere 20s (servidor acordando) e clique de novo.', 'error');
-      return;
-    }
+  if (!(await connectSocket())) return;
+  myName = name; saveName(name);
+  lastJoinPassword = password || '';
 
-    myName = name; saveName(name);
-    lastJoinPassword = password || '';
-
-    showToast('Entrando na sala...', 'info');
-    const res = await emitWithAck('join-room', {
-      roomId,
-      password,
-      userName: name,
-      photoUrl: safePhotoForEmit()
-    }, 15000);
-
-    if (res && res.success) {
+  socket.emit('join-room', { roomId, password, userName: name, photoUrl: loadPhoto() }, (res) => {
+    if (res.success) {
       isOwner = res.isOwner;
-      if (socket && socket.id) myId = socket.id;
-      // currentRoomId cedo — room-sync que chegou junto não é descartado
-      currentRoomId = String(res.roomId || roomId).toUpperCase();
       participants.clear();
-      (res.participants || []).forEach(p => {
-        if (!p || !p.id) return;
-        participants.set(p.id, {
-          name: p.name, isOwner: p.isOwner,
-          isBroadcasting: !!p.isBroadcasting, broadcastType: p.broadcastType || null,
-          hasMic: !!p.hasMic, micMuted: p.micMuted !== false,
-          photoUrl: p.photoUrl || ''
-        });
-      });
+      res.participants.forEach(p => participants.set(p.id, {
+        name: p.name, isOwner: p.isOwner,
+        isBroadcasting: p.isBroadcasting, broadcastType: p.broadcastType,
+        hasMic: p.hasMic, micMuted: p.micMuted,
+        photoUrl: p.photoUrl || ''
+      }));
       enterRoom(res.roomId, res.roomName, res.isOwner);
     } else {
-      const msg = (res && res.message) || 'Erro ao entrar na sala';
-      if (msg.toLowerCase().includes('não encontrada')) {
+      // Mensagem mais clara para "Sala não encontrada"
+      // (pode acontecer se o servidor reiniciou e perdeu as salas da memória)
+      if (res.message && res.message.toLowerCase().includes('não encontrada')) {
         showToast('Sala não encontrada. O criador precisa recriar a sala.', 'error');
-        loadRoomsList();
+        loadRoomsList(); // Atualizar lista para mostrar salas atuais
       } else {
-        showToast(msg, 'error');
+        showToast(res.message, 'error');
       }
-      if (msg.toLowerCase().includes('senha')) {
-        const fb = document.getElementById('btn-forgot-password');
-        if (fb) fb.classList.remove('hidden');
+      // Se falhou por senha incorreta, mostrar botão de recuperação
+      if (res.message && res.message.toLowerCase().includes('senha')) {
+        document.getElementById('btn-forgot-password').classList.remove('hidden');
       }
     }
-  } catch (err) {
-    console.error(err);
-    showToast('Erro inesperado ao entrar na sala', 'error');
-  } finally {
-    if (btn) { btn.disabled = false; btn.style.opacity = ''; }
-  }
+  });
 }
 
 function enterRoom(roomId, rName, owner) {
-  // Setar cedo para que room-sync concurrent não seja ignorado
-  currentRoomId = roomId ? String(roomId).toUpperCase() : roomId;
-  roomName = rName;
-  isOwner = owner;
-  if (socket && socket.id) myId = socket.id;
-
-  // Garante que os outros recebam nossa foto
-  const myPhoto = loadPhoto();
-  if (socket && myPhoto) {
-    setTimeout(() => { try { socket.emit('photo-share', { photoUrl: myPhoto }); } catch (_) {} }, 400);
-  }
+  currentRoomId = roomId; roomName = rName; isOwner = owner;
 
   document.getElementById('room-name-display').textContent = rName || roomId;
   document.getElementById('room-id-badge').textContent = roomId;
@@ -2211,9 +1639,6 @@ function enterRoom(roomId, rName, owner) {
   if (owner) {
     document.getElementById('btn-delete-room').classList.remove('hidden');
     document.getElementById('btn-delete-room').classList.add('flex');
-  } else {
-    document.getElementById('btn-delete-room').classList.add('hidden');
-    document.getElementById('btn-delete-room').classList.remove('flex');
   }
 
   document.getElementById('lobby-view').classList.add('hidden');
@@ -2222,108 +1647,13 @@ function enterRoom(roomId, rName, owner) {
   updateParticipantCount();
   renderParticipantsList();
 
-  // Mesh: conecta a todos que já estão na sala (várias tentativas)
-  const meshAll = () => {
-    if (socket && socket.id) myId = socket.id;
-    for (const [pid] of participants) {
-      if (!pid || pid === myId) continue;
-      ensureMeshWith(pid);
-    }
-  };
-  meshAll();
-  setTimeout(meshAll, 400);
-  setTimeout(meshAll, 1200);
-  setTimeout(meshAll, 2500);
-
-  // Liga o microfone automaticamente para call de voz na sala
-  // (usuário pode mutar depois). Falha silenciosa se negar permissão.
-  setTimeout(() => {
-    if (!currentRoomId) return;
-    if (!micStream) {
-      startMic().then(ok => {
-        if (ok) {
-          updateToolbarUI();
-          renderParticipantsList();
-        }
-      }).catch(() => {});
-    }
-  }, 600);
-
-  // Força sincronização da lista de participantes com o servidor
-  // (corrige caso user-joined/room-sync tenham sido perdidos)
-  requestRoomSync();
-  setTimeout(() => requestRoomSync(), 1000);
-  setTimeout(() => requestRoomSync(), 2500);
-  startRoomSyncLoop();
+  for (const [pid] of participants) {
+    if (pid === myId) continue;
+    connectToPeer(pid);
+    socket.emit('request-peer', { targetId: pid });
+  }
 
   showToast(`Você entrou em ${rName || roomId}`, 'success');
-}
-
-let _roomSyncTimer = null;
-function startRoomSyncLoop() {
-  stopRoomSyncLoop();
-  // Nos primeiros 20s sincroniza a cada 3s; depois a cada 12s
-  let ticks = 0;
-  _roomSyncTimer = setInterval(() => {
-    if (!currentRoomId || !socket || !socket.connected) {
-      stopRoomSyncLoop();
-      return;
-    }
-    requestRoomSync();
-    ticks++;
-    if (ticks === 7) {
-      // após ~21s, reduz frequência
-      stopRoomSyncLoop();
-      _roomSyncTimer = setInterval(() => {
-        if (!currentRoomId || !socket || !socket.connected) {
-          stopRoomSyncLoop();
-          return;
-        }
-        requestRoomSync();
-      }, 12000);
-    }
-  }, 3000);
-}
-function stopRoomSyncLoop() {
-  if (_roomSyncTimer) {
-    clearInterval(_roomSyncTimer);
-    _roomSyncTimer = null;
-  }
-}
-
-/** Pede ao servidor a lista oficial de quem está na sala e aplica no cliente */
-function requestRoomSync() {
-  if (!socket || !socket.connected || !currentRoomId) return;
-  try {
-    socket.emit('sync-room', (res) => {
-      if (!res || !res.success || !Array.isArray(res.participants)) return;
-      if (socket && socket.id) myId = socket.id;
-      const prevSize = participants.size;
-      participants.clear();
-      res.participants.forEach(p => {
-        if (!p || !p.id) return;
-        participants.set(p.id, {
-          name: p.name || 'Usuário',
-          isOwner: !!p.isOwner,
-          isBroadcasting: !!p.isBroadcasting,
-          broadcastType: p.broadcastType || null,
-          hasMic: !!p.hasMic,
-          micMuted: p.micMuted !== false,
-          photoUrl: p.photoUrl || ''
-        });
-      });
-      updateParticipantCount();
-      renderParticipantsList();
-      for (const [pid] of participants) {
-        if (!pid || pid === myId) continue;
-        ensureMeshWith(pid);
-      }
-      if (participants.size > prevSize) {
-        // Alguém novo detectado via sync
-        console.log('[MaxCord] sync-room: participantes =', participants.size);
-      }
-    });
-  } catch (_) {}
 }
 
 function rejoinAfterReconnect() {
@@ -2384,7 +1714,6 @@ function rejoinAfterReconnect() {
 }
 
 function leaveRoom(notify = true) {
-  stopRoomSyncLoop();
   stopAllMedia();
   for (const [pid, e] of peers) {
     if (e.pc) try { e.pc.close(); } catch (_) {}
@@ -2394,6 +1723,7 @@ function leaveRoom(notify = true) {
   peerVolumes.clear();
   hideTileVolumeMenu();
   document.querySelectorAll('audio[id^="remote-audio-"]').forEach(a => a.remove());
+  closeAiPanel();
 
   if (notify && socket) socket.emit('leave-room');
 
@@ -2439,14 +1769,7 @@ async function deleteRoom() {
 // ==================== UI ====================
 
 function updateParticipantCount() {
-  // participants pode ou não incluir o próprio usuário (room-sync inclui; user-joined não).
-  // Contamos IDs únicos garantindo que "eu" entre na conta.
-  const ids = new Set(participants.keys());
-  if (myId) ids.add(myId);
-  else if (socket && socket.id) ids.add(socket.id);
-  const n = Math.max(1, ids.size);
-  const el = document.getElementById('participant-count');
-  if (el) el.textContent = String(n);
+  document.getElementById('participant-count').textContent = participants.size + 1;
 }
 
 function renderParticipantsList() {
@@ -2454,12 +1777,23 @@ function renderParticipantsList() {
   list.innerHTML = '';
 
   const renderItem = (id, name, owner, broadcasting, broadType, hasMic, micMuted, isMe, photoUrl) => {
+    const col = nameColor(name);
     const micIcon = hasMic ? (micMuted ? '🔇' : '🎙️') : '';
     const vidIcon = broadcasting ? (broadType === 'screen' ? '🖥️' : '📹') : '';
     const div = document.createElement('div');
     div.className = 'participant-item';
+
+    // Avatar: foto/GIF se disponível, senão inicial com cor
+    const avatarHtml = photoUrl
+      ? `<div class="avatar avatar-sm" style="background:transparent;padding:0">
+           <img src="${photoUrl}" alt="${nameInitial(name)}"
+             style="width:100%;height:100%;object-fit:cover;border-radius:50%;display:block"
+             onerror="this.parentElement.innerHTML='${nameInitial(name)}';this.parentElement.style.background='linear-gradient(135deg,${col},${col}88)'">
+         </div>`
+      : `<div class="avatar avatar-sm" style="background:linear-gradient(135deg,${col},${col}88)">${nameInitial(name)}</div>`;
+
     div.innerHTML = `
-      ${avatarHtml(name, photoUrl, 'avatar-sm')}
+      ${avatarHtml}
       <span class="p-name">${name}${isMe ? ' <span style="font-size:10px;color:var(--accent-text)">(você)</span>' : ''}</span>
       <div class="p-badges">
         ${owner   ? '<span class="p-badge">👑</span>' : ''}
@@ -2484,19 +1818,14 @@ function updateToolbarUI() {
   const btnCamera = document.getElementById('btn-camera');
   const btnMic    = document.getElementById('btn-mic');
   const btnAudio  = document.getElementById('btn-audio');
-  const qWrap = document.getElementById('quality-select-wrap');
-  if (qWrap) qWrap.classList.toggle('hidden', !(isScreenSharing || isCameraOn));
 
-  // Celular: não mostra botão de transmissão de tela (getDisplayMedia limitado/inexistente no mobile)
-  if (isMobile() || !supportsScreenShare()) {
-    if (btnScreen) btnScreen.style.display = 'none';
+  // Esconder botão de tela em dispositivos sem suporte (mobile)
+  if (!supportsScreenShare()) {
+    btnScreen.style.display = 'none';
   } else {
-    if (btnScreen) {
-      btnScreen.style.display = '';
-      btnScreen.className = `toolbar-btn${isScreenSharing ? ' active-screen' : ''}`;
-      const lbl = btnScreen.querySelector('.btn-label');
-      if (lbl) lbl.textContent = isScreenSharing ? 'Parar Tela' : 'Tela';
-    }
+    btnScreen.style.display = '';
+    btnScreen.className = `toolbar-btn${isScreenSharing ? ' active-screen' : ''}`;
+    btnScreen.querySelector('.btn-label').textContent = isScreenSharing ? 'Parar Tela' : 'Tela';
   }
 
   btnCamera.className = `toolbar-btn${isCameraOn ? ' active-camera' : ''}`;
@@ -2533,26 +1862,18 @@ function loadRoomsList() {
 function renderRoomsList(roomsArr) {
   const c = document.getElementById('rooms-list');
   if (!c) return;
-  // Só salas com gente (servidor já filtra; reforço no cliente)
-  const active = (roomsArr || []).filter(r => (Number(r.participantCount) || 0) > 0);
-  if (!active.length) {
-    c.innerHTML = '<p class="rooms-empty">Nenhuma sala com pessoas no momento.</p>';
+  if (!roomsArr || !roomsArr.length) {
+    c.innerHTML = '<p class="rooms-empty">Nenhuma sala disponível no momento.</p>';
     return;
   }
   c.innerHTML = '';
-  active.forEach(room => {
-    const count = Number(room.participantCount) || 0;
-    const countLabel = count === 1 ? '1 pessoa' : `${count} pessoas`;
+  roomsArr.forEach(room => {
     const item = document.createElement('div');
     item.className = 'room-list-item';
     item.innerHTML = `
       <div class="room-info">
         <div class="room-title">${room.name || room.id}</div>
-        <div class="room-meta">${room.hasPassword ? '🔒 ' : ''}${room.ownerName || '—'} · ${countLabel}</div>
-      </div>
-      <div class="room-people-badge" title="${countLabel} na sala">
-        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>
-        <span>${count}</span>
+        <div class="room-meta">${room.hasPassword ? '🔒 ' : ''}${room.participantCount} participante${room.participantCount !== 1 ? 's' : ''} · ${room.ownerName}</div>
       </div>
       <div class="room-join-btn">Entrar</div>`;
     item.addEventListener('click', () => {
@@ -2700,62 +2021,36 @@ function enterEditMode() {
   setTimeout(() => usernameEl && usernameEl.focus(), 50);
 }
 
-async function saveProfile() {
+function saveProfile() {
   const nameEl  = document.getElementById('global-username');
   const photoEl = document.getElementById('profile-photo-url');
   const name    = nameEl ? nameEl.value.trim() : '';
-  let photo   = photoEl ? photoEl.value.trim() : '';
+  const photo   = photoEl ? photoEl.value.trim() : '';
 
   if (!name) {
     showToast('Digite seu apelido', 'error');
     if (nameEl) nameEl.focus();
     return;
   }
-
-  // Garante que data:image grandes sejam comprimidos antes de salvar/enviar
-  if (photo.startsWith('data:image/') && photo.length > 400000) {
-    try {
-      const blob = await (await fetch(photo)).blob();
-      const file = new File([blob], 'photo.jpg', { type: blob.type || 'image/jpeg' });
-      photo = await compressImageFile(file, 380000, 256);
-      if (photoEl) photoEl.value = photo;
-    } catch (err) {
-      console.warn('compress on save:', err);
-    }
-  }
-
   saveName(name);
   savePhoto(photo);
-  myName = name;
   showProfileView();
-
-  // Se já está em sala, avisa os outros da nova foto
-  if (socket && currentRoomId && photo) {
-    try {
-      socket.emit('photo-share', { photoUrl: photo });
-    } catch (_) {}
-  }
-
   showToast('Perfil salvo!', 'success');
 }
 
-async function handlePhotoUpload(file) {
+function handlePhotoUpload(file) {
   if (!file) return;
-  if (file.size > 4 * 1024 * 1024) {
-    showToast('Arquivo muito grande. Use até 4MB ou cole uma URL.', 'error');
+  if (file.size > 3 * 1024 * 1024) {
+    showToast('Arquivo muito grande. Use até 3MB ou cole uma URL.', 'error');
     return;
   }
-  try {
-    showToast('Processando imagem...', 'info');
-    const dataUrl = await compressImageFile(file, 380000, 256);
+  const reader = new FileReader();
+  reader.onload = (e) => {
     const photoEl = document.getElementById('profile-photo-url');
-    if (photoEl) photoEl.value = dataUrl;
+    if (photoEl) photoEl.value = e.target.result;
     updateAvatarPreview();
-    showToast('Imagem pronta!', 'success');
-  } catch (err) {
-    console.error(err);
-    showToast('Falha ao processar imagem', 'error');
-  }
+  };
+  reader.readAsDataURL(file);
 }
 
 // ==================== EVENT LISTENERS ====================
@@ -2840,9 +2135,6 @@ document.getElementById('btn-camera').addEventListener('click', () => {
     startCamera();
   }
 });
-// Virar câmera (mobile)
-const btnFlipCam = document.getElementById('btn-flip-camera');
-if (btnFlipCam) btnFlipCam.addEventListener('click', flipCamera);
 document.getElementById('btn-mic').addEventListener('click', toggleMic);
 document.getElementById('btn-audio').addEventListener('click', toggleAudio);
 document.getElementById('btn-leave').addEventListener('click', () => leaveRoom(true));
@@ -3037,17 +2329,12 @@ window.addEventListener('pagehide', (e) => {
   }
 });
 
-// visibilitychange: NÃO sair ao minimizar/background — reconectar + re-sincronizar participantes
+// visibilitychange: NÃO sair ao minimizar/background — apenas reconectar se preciso
 document.addEventListener('visibilitychange', () => {
-  if (document.visibilityState !== 'visible' || !currentRoomId) return;
-  if (socket && !socket.connected) {
-    connectSocket().then(() => requestRoomSync());
-  } else {
-    requestRoomSync();
+  if (document.visibilityState === 'visible' && currentRoomId && socket && !socket.connected) {
+    // Voltou ao app e perdeu conexão — tentar reconectar
+    connectSocket();
   }
-});
-window.addEventListener('focus', () => {
-  if (currentRoomId) requestRoomSync();
 });
 
 // ==================== SISTEMA DE TEMAS ====================
@@ -3132,7 +2419,6 @@ document.getElementById('modal-themes').addEventListener('click', e => {
 
 function setupChatListeners() {
   socket.on('chat-message', (msg) => {
-    if (msg && msg.id && msg.id !== myId) { try { playNotifySound('message'); } catch (_) {} }
     addChatMessage(msg);
     // Notificar se chat estiver fechado
     if (!chatOpen) {
@@ -3155,16 +2441,12 @@ function addChatMessage(msg) {
   const div = document.createElement('div');
   div.className = `chat-msg${isMe ? ' own' : ''}`;
 
-  const avHtml = (msg.photoUrl && msg.photoUrl.length > 10)
-    ? `<div class="chat-msg-avatar" style="background:transparent;padding:0;overflow:hidden">
-         <img src="${String(msg.photoUrl).replace(/"/g,'&quot;')}" alt=""
-           style="width:100%;height:100%;object-fit:cover;border-radius:50%;display:block"
-           onerror="this.style.display='none';this.parentElement.style.background='linear-gradient(135deg,${col},${col}88)';this.parentElement.textContent='${nameInitial(msg.name)}';">
-       </div>`
+  const avatarHtml = msg.photoUrl
+    ? `<div class="chat-msg-avatar"><img src="${msg.photoUrl}" onerror="this.parentElement.textContent='${nameInitial(msg.name)}'"></div>`
     : `<div class="chat-msg-avatar" style="background:linear-gradient(135deg,${col},${col}88)">${nameInitial(msg.name)}</div>`;
 
   div.innerHTML = `
-    ${avHtml}
+    ${avatarHtml}
     <div class="chat-msg-body">
       <div class="chat-msg-header">
         <span class="chat-msg-name">${msg.name}</span>
@@ -3213,131 +2495,327 @@ document.getElementById('chat-input').addEventListener('keypress', e => {
   if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendChatMessage(); }
 });
 
-// ==================== SUPRESSÃO DE RUÍDOS ====================
-let noiseCtx = null, noiseWorklet = null, noiseSource = null, noiseDest = null, noiseStream = null;
-let noiseWorkletReady = false;
+// ==================== IA BETA ====================
 
-function getMicConstraints() {
-  return {
-    audio: {
-      echoCancellation: true,
-      noiseSuppression: !!noiseSuppressionOn,
-      autoGainControl: true,
-      channelCount: 1
-    },
-    video: false
-  };
+let aiOpen = false;
+let aiBusy = false;
+let aiEnabled = true; // atualizado via /api/ai/status
+
+/** Base do backend (Render). Evita chamar Netlify estático e achar que a IA está off. */
+function apiBase() {
+  const base = (window.SOCKET_URL || location.origin || '').replace(/\/$/, '');
+  return base || location.origin;
 }
 
-async function ensureNoiseWorklet(ctx) {
-  if (noiseWorkletReady) return true;
+async function checkAiStatus() {
   try {
-    await ctx.audioWorklet.addModule('/noise-processor.js');
-    noiseWorkletReady = true;
+    const r = await fetch(apiBase() + '/api/ai/status', { credentials: 'omit' });
+    const data = await r.json().catch(() => ({}));
+    aiEnabled = !!data.enabled;
+    const btn = document.getElementById('btn-ai');
+    if (btn) btn.classList.remove('hidden');
+    if (!aiEnabled) {
+      console.warn('[IA] Configure GEMINI_API_KEY e AI_BETA_ENABLED=true no Render.');
+    }
+  } catch (err) {
+    console.warn('[IA] status falhou:', err && err.message);
+    // Não esconde o botão; a pergunta real mostra o erro
+    aiEnabled = true;
+    const btn = document.getElementById('btn-ai');
+    if (btn) btn.classList.remove('hidden');
+  }
+}
+
+function toggleAiPanel() {
+  const panel = document.getElementById('ai-panel');
+  aiOpen = !aiOpen;
+  panel.classList.toggle('hidden', !aiOpen);
+  if (aiOpen) {
+    chatOpen = false;
+    document.getElementById('chat-panel').classList.add('hidden');
+    setTimeout(() => {
+      const inp = document.getElementById('ai-input');
+      if (inp) inp.focus();
+    }, 80);
+    // Revalida status ao abrir
+    checkAiStatus();
+  }
+}
+
+function closeAiPanel() {
+  aiOpen = false;
+  document.getElementById('ai-panel').classList.add('hidden');
+}
+
+function appendAiBubble(role, text, extraClass) {
+  const box = document.getElementById('ai-messages');
+  if (!box) return null;
+  const welcome = box.querySelector('.ai-welcome');
+  if (welcome) welcome.remove();
+
+  const div = document.createElement('div');
+  div.className = `ai-bubble ${role}${extraClass ? ' ' + extraClass : ''}`;
+  if (role === 'bot') {
+    div.innerHTML = `<span class="ai-bubble-label">IA Beta</span>${escapeHtml(text)}`;
+  } else {
+    div.textContent = text;
+  }
+  box.appendChild(div);
+  box.scrollTop = box.scrollHeight;
+  return div;
+}
+
+async function askAi(prompt, mode) {
+  prompt = (prompt || '').trim();
+  if (!prompt || aiBusy) return;
+
+  const game = (document.getElementById('ai-game') && document.getElementById('ai-game').value || '').trim();
+  mode = mode || 'chat';
+
+  aiBusy = true;
+  document.querySelectorAll('.ai-chip').forEach(c => { c.disabled = true; });
+  appendAiBubble('user', prompt);
+  const loading = appendAiBubble('bot', 'Pensando…', 'loading');
+
+  try {
+    const r = await fetch(apiBase() + '/api/ai/assist', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ prompt, mode, game }),
+      credentials: 'omit'
+    });
+    const data = await r.json().catch(() => ({}));
+    if (loading) loading.remove();
+    if (!r.ok) {
+      const msg = data.error || 'Falha ao consultar a IA.';
+      appendAiBubble('bot', msg, 'error');
+      if (/não configurada|desativada|GEMINI/i.test(msg)) {
+        showToast('No Render: defina GEMINI_API_KEY e AI_BETA_ENABLED=true', 'info');
+      }
+    } else {
+      aiEnabled = true;
+      appendAiBubble('bot', data.answer || 'Sem resposta.');
+    }
+  } catch (err) {
+    if (loading) loading.remove();
+    appendAiBubble('bot', 'Erro de rede ao falar com a IA. Confira se o backend (Render) está online.', 'error');
+  } finally {
+    aiBusy = false;
+    document.querySelectorAll('.ai-chip').forEach(c => { c.disabled = false; });
+  }
+}
+
+function sendAiFromInput() {
+  const input = document.getElementById('ai-input');
+  if (!input) return;
+  const text = input.value.trim();
+  if (!text) return;
+  input.value = '';
+  askAi(text, 'chat');
+}
+
+const btnAi = document.getElementById('btn-ai');
+if (btnAi) btnAi.addEventListener('click', toggleAiPanel);
+const btnCloseAi = document.getElementById('btn-close-ai');
+if (btnCloseAi) btnCloseAi.addEventListener('click', closeAiPanel);
+const btnAiSend = document.getElementById('btn-ai-send');
+if (btnAiSend) btnAiSend.addEventListener('click', sendAiFromInput);
+const aiInput = document.getElementById('ai-input');
+if (aiInput) {
+  aiInput.addEventListener('keypress', e => {
+    if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendAiFromInput(); }
+  });
+}
+document.querySelectorAll('.ai-chip').forEach(chip => {
+  chip.addEventListener('click', () => {
+    const mode = chip.dataset.mode || 'chat';
+    const prompt = chip.dataset.prompt || '';
+    askAi(prompt, mode);
+  });
+});
+
+// Atalho no chat: mensagens começando com @ia / @bot
+const _origSendChat = sendChatMessage;
+sendChatMessage = function () {
+  const input = document.getElementById('chat-input');
+  const text = (input && input.value || '').trim();
+  const m = text.match(/^@(ia|bot|ai)\s+(.+)/i);
+  if (m) {
+    input.value = '';
+    if (!aiOpen) toggleAiPanel();
+    askAi(m[2], 'chat');
+    return;
+  }
+  _origSendChat();
+};
+
+// Verifica se a IA está ligada ao carregar
+checkAiStatus();
+
+// ==================== FLIP CÂMERA (mobile) ====================
+
+async function flipCamera() {
+  if (!isCameraOn || !cameraStream) return;
+  currentFacingMode = currentFacingMode === 'user' ? 'environment' : 'user';
+
+  try {
+    // Parar stream atual
+    cameraStream.getTracks().forEach(t => t.stop());
+
+    const constraints = {
+      video: {
+        facingMode: currentFacingMode,
+        width:  { ideal: streamQuality === 'high' ? 1280 : streamQuality === 'medium' ? 720 : 480 },
+        height: { ideal: streamQuality === 'high' ? 720  : streamQuality === 'medium' ? 480 : 360 },
+        frameRate: { ideal: streamQuality === 'low' ? 15 : 30 }
+      },
+      audio: false
+    };
+
+    cameraStream = await navigator.mediaDevices.getUserMedia(constraints);
+    const newVideoTrack = cameraStream.getVideoTracks()[0];
+
+    // Substituir nos peers
+    replaceVideoInAllPeers(newVideoTrack);
+    updateSelfPreview();
+    showToast(`Câmera ${currentFacingMode === 'user' ? 'frontal' : 'traseira'} ativada`, 'success');
+  } catch (err) {
+    console.error('flipCamera:', err);
+    showToast('Não foi possível virar a câmera', 'error');
+    currentFacingMode = currentFacingMode === 'user' ? 'environment' : 'user'; // reverter
+  }
+}
+
+document.getElementById('btn-flip-camera').addEventListener('click', flipCamera);
+
+// ==================== SUPRESSÃO DE RUÍDO (RNNoise AI) ====================
+
+// Estado do pipeline RNNoise
+let noiseCtx       = null;   // AudioContext
+let noiseWorklet   = null;   // AudioWorkletNode (RNNoise)
+let noiseSource    = null;   // MediaStreamAudioSourceNode
+let noiseDest      = null;   // MediaStreamAudioDestinationNode
+let noiseStream    = null;   // stream processado pelo RNNoise
+let rnnoiseModule  = null;   // WASM module carregado
+let rnnoiseReady   = false;  // módulo WASM pronto
+
+// URL do RNNoise WASM (Jitsi CDN — open source, Apache 2.0)
+const RNNOISE_WASM_URL = 'https://cdn.jsdelivr.net/npm/@jitsi/rnnoise-wasm@0.0.1/dist/rnnoise.wasm';
+const RNNOISE_JS_URL   = 'https://cdn.jsdelivr.net/npm/@jitsi/rnnoise-wasm@0.0.1/dist/rnnoise.js';
+
+async function loadRNNoise() {
+  if (rnnoiseReady) return true;
+  try {
+    // Carregar o módulo JS do RNNoise dinamicamente
+    await new Promise((resolve, reject) => {
+      const script = document.createElement('script');
+      script.src = RNNOISE_JS_URL;
+      script.onload  = resolve;
+      script.onerror = reject;
+      document.head.appendChild(script);
+    });
+
+    // Inicializar o módulo WASM
+    rnnoiseModule = await window.createRNNoise({ locateFile: () => RNNOISE_WASM_URL });
+    rnnoiseReady  = true;
     return true;
   } catch (err) {
-    console.warn('Noise worklet:', err);
+    console.warn('RNNoise WASM não disponível, usando supressão nativa do browser:', err);
     return false;
   }
 }
 
-function destroyNoisePipeline() {
-  try {
-    if (noiseWorklet) { try { noiseWorklet.port.postMessage({ type: 'enable', value: false }); } catch (_) {} try { noiseWorklet.disconnect(); } catch (_) {} }
-    try { noiseSource && noiseSource.disconnect(); } catch (_) {}
-    try { noiseDest && noiseDest.disconnect(); } catch (_) {}
-    if (noiseCtx && noiseCtx.state !== 'closed') { try { noiseCtx.close(); } catch (_) {} }
-  } catch (_) {}
-  noiseWorklet = null; noiseSource = null; noiseDest = null; noiseCtx = null; noiseStream = null;
-}
+async function applyRNNoise(rawStream) {
+  if (!rnnoiseReady || !rnnoiseModule) return rawStream;
 
-async function applyNoiseSuppression(rawStream) {
-  if (!rawStream || !rawStream.getAudioTracks().length) return rawStream;
-  if (!noiseSuppressionOn) return rawStream;
-  destroyNoisePipeline();
   try {
-    noiseCtx = new (window.AudioContext || window.webkitAudioContext)();
-    if (noiseCtx.state === 'suspended') { try { await noiseCtx.resume(); } catch (_) {} }
-    if (!(await ensureNoiseWorklet(noiseCtx))) return rawStream;
-    noiseSource = noiseCtx.createMediaStreamSource(rawStream);
-    noiseWorklet = new AudioWorkletNode(noiseCtx, 'noise-suppression-processor', { numberOfInputs: 1, numberOfOutputs: 1, channelCount: 1 });
-    noiseDest = noiseCtx.createMediaStreamDestination();
-    noiseWorklet.port.postMessage({ type: 'enable', value: true });
-    noiseWorklet.port.postMessage({ type: 'threshold', value: 0.012 });
+    // Criar AudioContext com a mesma taxa de amostragem do stream
+    noiseCtx  = new (window.AudioContext || window.webkitAudioContext)({ sampleRate: 48000 });
+
+    // Registrar o worklet processor
+    await noiseCtx.audioWorklet.addModule('/noise-processor.js');
+
+    // Criar nós
+    noiseSource  = noiseCtx.createMediaStreamSource(rawStream);
+    noiseWorklet = new AudioWorkletNode(noiseCtx, 'rnnoise-processor');
+    noiseDest    = noiseCtx.createMediaStreamDestination();
+
+    // Enviar o módulo WASM para o worklet via port
+    noiseWorklet.port.postMessage({ type: 'init', module: rnnoiseModule });
+
+    // Conectar pipeline: source → rnnoise → destination
     noiseSource.connect(noiseWorklet);
     noiseWorklet.connect(noiseDest);
+
     noiseStream = noiseDest.stream;
     return noiseStream;
   } catch (err) {
-    console.warn('applyNoiseSuppression:', err);
-    destroyNoisePipeline();
+    console.warn('AudioWorklet RNNoise falhou, usando stream original:', err);
+    destroyRNNoise();
     return rawStream;
   }
 }
 
-function updateNoiseButtonUI() {
-  const btn = document.getElementById('btn-noise');
-  if (!btn) return;
-  btn.classList.toggle('active-noise', noiseSuppressionOn);
-  btn.classList.toggle('off-noise', !noiseSuppressionOn);
-  const label = btn.querySelector('.btn-label');
-  if (label) label.textContent = noiseSuppressionOn ? 'Supressão de ruídos' : 'Supressão off';
-  btn.title = noiseSuppressionOn ? 'Supressão de ruídos ativa — clique para desativar' : 'Supressão desativada — clique para ativar';
-}
-
-async function restartMicWithNoiseSetting() {
-  if (!micStream && !isMicOn) return;
-  destroyNoisePipeline();
-  try {
-    const raw = await navigator.mediaDevices.getUserMedia(getMicConstraints());
-    if (micStream) { try { micStream.getTracks().forEach(t => t.stop()); } catch (_) {} }
-    micStream = raw;
-    isMicOn = true;
-    let outStream = raw;
-    if (noiseSuppressionOn) outStream = await applyNoiseSuppression(raw);
-    const track = outStream.getAudioTracks()[0] || raw.getAudioTracks()[0];
-    if (!isScreenSharing) {
-      setOutboundAudioTrack(track, outStream);
-      pushOutboundAudioToAllPeers();
-    } else {
-      pushOutboundAudioToAllPeers();
-    }
-    if (socket) socket.emit('mic-update', { hasMic: true, micMuted: false });
-  } catch (err) {
-    console.error(err);
-    showToast('Não foi possível reaplicar o microfone', 'error');
+function destroyRNNoise() {
+  if (noiseWorklet) {
+    try { noiseWorklet.port.postMessage({ type: 'destroy' }); } catch (_) {}
+    noiseWorklet.disconnect();
+    noiseWorklet = null;
   }
+  if (noiseSource) { noiseSource.disconnect(); noiseSource = null; }
+  if (noiseCtx)    { noiseCtx.close().catch(() => {}); noiseCtx = null; }
+  noiseDest  = null;
+  noiseStream = null;
 }
 
 async function toggleNoiseSuppression() {
   noiseSuppressionOn = !noiseSuppressionOn;
-  try { localStorage.setItem('mc_noise_suppression', noiseSuppressionOn ? '1' : '0'); } catch (_) {}
-  updateNoiseButtonUI();
-  if (micStream || isMicOn) await restartMicWithNoiseSetting();
-  try { window.dispatchEvent(new CustomEvent('mc-noise-toggle', { detail: { enabled: noiseSuppressionOn } })); } catch (_) {}
-  showToast(noiseSuppressionOn ? 'Supressão de ruídos ativada' : 'Supressão de ruídos desativada', noiseSuppressionOn ? 'success' : 'info');
+
+  // Se mic ativo, reaplicar pipeline
+  if (micStream) {
+    const oldTrack = micStream.getAudioTracks()[0];
+
+    if (noiseSuppressionOn && rnnoiseReady) {
+      // Ativar RNNoise
+      const processedStream = await applyRNNoise(micStream);
+      const processedTrack  = processedStream.getAudioTracks()[0];
+      if (processedTrack && processedTrack !== oldTrack) {
+        for (const [, entry] of peers) {
+          if (entry.pc) replaceAudioTrackInPeer(entry.pc, processedTrack);
+        }
+      }
+      showToast('🎙️ RNNoise ativado — ruído removido por IA', 'success');
+    } else {
+      // Desativar — voltar ao mic direto
+      destroyRNNoise();
+      if (oldTrack) {
+        for (const [, entry] of peers) {
+          if (entry.pc) replaceAudioTrackInPeer(entry.pc, oldTrack);
+        }
+      }
+      showToast('Supressão de ruído desativada', 'info');
+    }
+  }
+
+  const btn = document.getElementById('btn-noise');
+  if (noiseSuppressionOn) {
+    btn.className = 'toolbar-btn active-noise';
+    btn.querySelector('.btn-label').textContent = 'RNNoise';
+  } else {
+    btn.className = 'toolbar-btn off-noise';
+    btn.querySelector('.btn-label').textContent = 'Ruído Off';
+  }
 }
 
-window.NoiseSuppression = {
-  isEnabled: () => !!noiseSuppressionOn,
-  setEnabled: async (on) => { noiseSuppressionOn = !!on; updateNoiseButtonUI(); if (micStream || isMicOn) await restartMicWithNoiseSetting(); },
-  toggle: () => toggleNoiseSuppression(),
-  processStream: (s) => applyNoiseSuppression(s),
-  getConstraints: () => getMicConstraints()
+document.getElementById('btn-noise').addEventListener('click', toggleNoiseSuppression);
+
+// ==================== QUALIDADE DE TRANSMISSÃO ====================
+
+const QUALITY_PRESETS = {
+  high:   { width: 1920, height: 1080, frameRate: 30, bitrate: 2500000 },
+  medium: { width: 1280, height: 720,  frameRate: 30, bitrate: 1200000 },
+  low:    { width: 854,  height: 480,  frameRate: 15, bitrate:  500000 }
 };
-
-function destroyRNNoise() { destroyNoisePipeline(); }
-async function applyRNNoise(raw) { return applyNoiseSuppression(raw); }
-async function loadRNNoise() { return true; }
-
-const btnNoiseEl = document.getElementById('btn-noise');
-if (btnNoiseEl) btnNoiseEl.addEventListener('click', toggleNoiseSuppression);
-try {
-  const saved = localStorage.getItem('mc_noise_suppression');
-  if (saved === '0') noiseSuppressionOn = false;
-  if (saved === '1') noiseSuppressionOn = true;
-} catch (_) {}
-updateNoiseButtonUI();
 
 // ==================== SELECT DE QUALIDADE (inline na toolbar) ====================
 
@@ -3348,21 +2826,7 @@ document.getElementById('quality-select').addEventListener('change', async (e) =
   const q = QUALITY_PRESETS[streamQuality];
   if (!q) return;
 
-  const label = e.target.options[e.target.selectedIndex] ? e.target.options[e.target.selectedIndex].text : streamQuality;
-
-  // Sempre atualizar bitrate / framerate / scaleResolutionDownBy nos senders
-  const applyAll = async () => {
-    for (const [, entry] of peers) {
-      if (!entry.pc) continue;
-      const vs = entry.pc.getSenders().find(s => s.track && s.track.kind === 'video');
-      if (vs) await optimizeVideoSenderWithPreset(vs, q);
-    }
-  };
-  await applyAll();
-  // Segunda aplicação após um tick (alguns browsers só aplicam após negociação)
-  setTimeout(() => { applyAll().catch(() => {}); }, 300);
-
-  // Câmera: reaplicar constraints em tempo real
+  // Se câmera ativa, reaplicar constraints em tempo real
   if (isCameraOn && cameraStream) {
     const videoTrack = cameraStream.getVideoTracks()[0];
     if (videoTrack) {
@@ -3372,7 +2836,13 @@ document.getElementById('quality-select').addEventListener('change', async (e) =
           height:    { ideal: isMobile() ? Math.min(q.height, 480) : q.height },
           frameRate: { ideal: q.frameRate }
         });
-        showToast(`Qualidade: ${label}`, 'success');
+        // Atualizar bitrate nos senders
+        for (const [, entry] of peers) {
+          if (!entry.pc) continue;
+          const vs = entry.pc.getSenders().find(s => s.track && s.track.kind === 'video');
+          if (vs) optimizeVideoSenderWithPreset(vs, q);
+        }
+        showToast(`Qualidade: ${e.target.options[e.target.selectedIndex].text}`, 'success');
       } catch (err) {
         console.warn('applyConstraints falhou, recriando câmera:', err);
         await stopCamera();
@@ -3380,58 +2850,19 @@ document.getElementById('quality-select').addEventListener('change', async (e) =
       }
     }
   } else if (isScreenSharing && screenStream) {
-    // Tela: tentar applyConstraints (alguns browsers respeitam frameRate/bitrate)
-    const videoTrack = screenStream.getVideoTracks()[0];
-    if (videoTrack) {
-      try {
-        await videoTrack.applyConstraints({
-          frameRate: { ideal: q.frameRate, max: Math.max(q.frameRate, 30) },
-          width: { ideal: q.width, max: q.width },
-          height: { ideal: q.height, max: q.height }
-        });
-      } catch (err) {
-        console.warn('applyConstraints tela (parcial):', err);
-      }
-    }
-    showToast(`Qualidade da tela: ${label} (bitrate/fps atualizados)`, 'success');
+    showToast(`Qualidade ${e.target.options[e.target.selectedIndex].text} salva`, 'info');
   } else {
-    showToast(`Qualidade definida: ${label}`, 'info');
+    showToast(`Qualidade definida: ${e.target.options[e.target.selectedIndex].text}`, 'info');
   }
 });
-
-// Melhora o clique no botão de qualidade (área maior + abre o select)
-(function improveQualitySelectClick() {
-  const wrap = document.getElementById('quality-select-wrap');
-  const sel = document.getElementById('quality-select');
-  if (!wrap || !sel) return;
-  wrap.addEventListener('click', (e) => {
-    if (e.target === sel) return;
-    e.preventDefault();
-    e.stopPropagation();
-    // Abre o dropdown nativo de forma mais confiável
-    try {
-      sel.focus();
-      if (typeof sel.showPicker === 'function') sel.showPicker();
-      else sel.click();
-    } catch (_) {
-      sel.click();
-    }
-  });
-})();
 
 async function optimizeVideoSenderWithPreset(sender, q) {
   if (!sender || typeof sender.getParameters !== 'function') return;
   try {
     const params = sender.getParameters();
     if (!params.encodings || !params.encodings.length) params.encodings = [{}];
-    const isScreen = isScreenSharing;
-    let down = 1;
-    if (streamQuality === 'medium') down = isScreen ? 1.5 : 1.25;
-    if (streamQuality === 'low') down = isScreen ? 2.5 : 2;
-    params.encodings[0].scaleResolutionDownBy = down;
-    params.encodings[0].maxBitrate = q.bitrate;
+    params.encodings[0].maxBitrate  = q.bitrate;
     params.encodings[0].maxFramerate = q.frameRate;
-    params.degradationPreference = isScreen ? 'maintain-resolution' : 'balanced';
     await sender.setParameters(params);
   } catch (_) {}
 }

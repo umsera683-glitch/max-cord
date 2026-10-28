@@ -1,0 +1,9 @@
+1) Extraia DENTRO de C:\Users\bracinho\Desktop\site-transmicao (substituir arquivos). Nao apague .git
+
+2) PowerShell:
+$g = "C:\Program Files\Git\cmd\git.exe"; $d = "C:\Users\bracinho\Desktop\site-transmicao"; & $g -C $d add .; & $g -C $d commit -m "update"; & $g -C $d push origin main
+
+3) OBRIGATORIO no Render > Environment:
+   GEMINI_API_KEY = sua key Gemini
+   AI_BETA_ENABLED = true
+Sem isso a IA fica desativada no servidor.
