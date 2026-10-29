@@ -10,18 +10,19 @@ const path       = require('path');
 require('dotenv').config();
 
 /** POST JSON via https nativo (compatível com Node antigo, sem fetch). */
-function httpsPostJson(urlStr, bodyObj, timeoutMs) {
+function httpsPostJson(urlStr, bodyObj, timeoutMs, extraHeaders) {
   return new Promise((resolve, reject) => {
     const u = new URL(urlStr);
     const payload = JSON.stringify(bodyObj);
+    const headers = Object.assign({
+      'Content-Type': 'application/json',
+      'Content-Length': Buffer.byteLength(payload)
+    }, extraHeaders || {});
     const req = https.request({
       hostname: u.hostname,
       path: u.pathname + u.search,
       method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Content-Length': Buffer.byteLength(payload)
-      },
+      headers,
       timeout: timeoutMs || 25000
     }, (res) => {
       let data = '';
@@ -63,7 +64,7 @@ const io = new Server(server, {
     methods: ['GET', 'POST']
   },
   // SDP/ICE cabem com folga; fotos de perfil grandes são recusadas no cliente
-  maxHttpBufferSize: 5e5
+  maxHttpBufferSize: 1.5e6
 });
 
 // ==================== MIDDLEWARES DE SEGURANÇA ====================
@@ -121,6 +122,22 @@ app.use(express.static(path.join(__dirname, 'public')));
 function sanitizeStr(val, maxLen) {
   if (typeof val !== 'string') return '';
   return val.trim().slice(0, maxLen || 100).replace(/[<>]/g, '');
+}
+
+/** Foto/GIF de perfil: permite data URL ou https (limite maior que texto). */
+function sanitizePhotoUrl(val) {
+  if (typeof val !== 'string') return '';
+  const s = val.trim();
+  if (!s) return '';
+  // data:image (jpg/png/gif/webp) — até ~200KB em base64
+  if (/^data:image\/(png|jpe?g|gif|webp);base64,/i.test(s)) {
+    return s.slice(0, 220000);
+  }
+  // URL http(s)
+  if (/^https?:\/\//i.test(s)) {
+    return s.slice(0, 2000).replace(/[<>]/g, '');
+  }
+  return '';
 }
 
 function isValidRoomId(id) {
@@ -296,7 +313,7 @@ io.on('connection', (socket) => {
     const roomName = sanitizeStr((data || {}).roomName, 50) || roomId;
     const password = sanitizeStr((data || {}).password, 60);
     const userName = sanitizeStr((data || {}).userName, 20);
-    const photoUrl = sanitizeStr((data || {}).photoUrl || '', 500);
+    const photoUrl = sanitizePhotoUrl((data || {}).photoUrl || '');
 
     if (!userName)           return callback({ success: false, message: 'Nome inválido.' });
     if (!isValidRoomId(roomId)) return callback({ success: false, message: 'ID de sala inválido.' });
@@ -339,7 +356,7 @@ io.on('connection', (socket) => {
     const roomId   = sanitizeStr((data || {}).roomId, 12).toUpperCase();
     const password = sanitizeStr((data || {}).password, 60);
     const userName = sanitizeStr((data || {}).userName, 20);
-    const photoUrl = sanitizeStr((data || {}).photoUrl || '', 500);
+    const photoUrl = sanitizePhotoUrl((data || {}).photoUrl || '');
 
     if (!userName) return callback({ success: false, message: 'Nome inválido.' });
 
@@ -513,126 +530,13 @@ app.get('/health', (req, res) => {
   res.json({
     status: 'online',
     rooms: rooms.size,
-    uptime: Math.floor(process.uptime()),
-    aiBeta: process.env.AI_BETA_ENABLED !== 'false' && !!process.env.GEMINI_API_KEY
+    uptime: Math.floor(process.uptime())
   });
 });
 
 // Bloquear acesso a arquivos sensíveis
 app.get(['/server.js', '/.env', '/package.json', '/package-lock.json'], (req, res) => {
   res.status(403).json({ error: 'Proibido' });
-});
-
-// ==================== IA BETA (Gemini) ====================
-// Recursos: dicas de jogo, capa/título de live, música, perguntas básicas.
-// Desative com AI_BETA_ENABLED=false ou removendo GEMINI_API_KEY.
-
-const AI_SYSTEM = `Você é o assistente BETA do MaxCord (site de transmissão de tela/áudio em tempo real).
-Responda SEMPRE em português do Brasil, de forma curta, prática e amigável.
-Você ajuda streamers e espectadores com:
-1) Dicas de como passar fases / mecânicas básicas de jogos (sem spoilers pesados, a menos que peçam).
-2) Ideias de título, descrição e texto de capa para a transmissão.
-3) Sugestões de playlists/músicas que combinam com o clima do jogo ou da live.
-4) Perguntas básicas sobre o MaxCord (compartilhar tela, mic, volume, mobile).
-Não invente cheats ilegais. Se não souber o jogo, diga e peça mais contexto (nome do jogo, plataforma, o que está travando).
-Máximo ~180 palavras, use listas quando ajudar.`;
-
-const aiRate = rateLimit({
-  windowMs: 60 * 1000,
-  max: 12,
-  standardHeaders: true,
-  legacyHeaders: false,
-  message: { error: 'Muitas perguntas à IA. Aguarde 1 minuto.' }
-});
-
-app.get('/api/ai/status', (req, res) => {
-  const enabled = process.env.AI_BETA_ENABLED !== 'false' && !!process.env.GEMINI_API_KEY;
-  res.json({ enabled, beta: true, label: 'IA Beta' });
-});
-
-app.post('/api/ai/assist', aiRate, async (req, res) => {
-  try {
-    if (process.env.AI_BETA_ENABLED === 'false') {
-      return res.status(503).json({ error: 'IA Beta desativada.' });
-    }
-    const apiKey = process.env.GEMINI_API_KEY;
-    if (!apiKey) {
-      return res.status(503).json({ error: 'IA não configurada (faltando GEMINI_API_KEY).' });
-    }
-
-    const body = req.body || {};
-    let mode = typeof body.mode === 'string' ? body.mode.slice(0, 32) : 'chat';
-    let prompt = typeof body.prompt === 'string' ? body.prompt.trim().slice(0, 800) : '';
-    let game = typeof body.game === 'string' ? body.game.trim().slice(0, 80) : '';
-
-    if (!prompt) {
-      return res.status(400).json({ error: 'Escreva uma pergunta ou use um atalho.' });
-    }
-
-    const modeHints = {
-      game: 'Modo: DICAS DE JOGO. Foque em como passar / mecânicas / o que fazer agora.',
-      cover: 'Modo: CAPA / TÍTULO DA LIVE. Sugira 3 títulos chamativos, 1 descrição curta e 3 frases para overlay/capa.',
-      music: 'Modo: MÚSICA. Sugira 6–10 músicas ou playlists (gênero + exemplos) que combinam com o clima do jogo/live.',
-      chat: 'Modo: PERGUNTA GERAL.'
-    };
-    const hint = modeHints[mode] || modeHints.chat;
-    const userText = [
-      hint,
-      game ? `Jogo / contexto: ${game}` : '',
-      `Pedido do usuário: ${prompt}`
-    ].filter(Boolean).join('\n');
-
-    // Modelos Gemini (ordem de preferência; fallback se o nome mudar)
-    const models = ['gemini-3.8-flash', 'gemini-2.5-flash', 'gemini-2.0-flash', 'gemini-1.5-flash'];
-    let lastErr = null;
-    let answer = null;
-
-    for (const model of models) {
-      try {
-        const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${encodeURIComponent(apiKey)}`;
-        const r = await httpsPostJson(url, {
-          systemInstruction: { parts: [{ text: AI_SYSTEM }] },
-          contents: [{ role: 'user', parts: [{ text: userText }] }],
-          generationConfig: {
-            temperature: 0.7,
-            maxOutputTokens: 512,
-            topP: 0.9
-          }
-        }, 25000);
-        const data = r.json || {};
-        if (!r.ok) {
-          lastErr = (data.error && data.error.message) || `HTTP ${r.status}`;
-          continue;
-        }
-        const parts = data.candidates && data.candidates[0] && data.candidates[0].content && data.candidates[0].content.parts;
-        const text = Array.isArray(parts) ? parts.map(p => p.text || '').join('').trim() : '';
-        if (text) {
-          answer = text;
-          break;
-        }
-        lastErr = 'Resposta vazia do modelo';
-      } catch (e) {
-        lastErr = e.message || String(e);
-      }
-    }
-
-    if (!answer) {
-      console.error('[AI] falha:', lastErr);
-      return res.status(502).json({
-        error: 'Não foi possível responder agora. Tente de novo em instantes.',
-        detail: process.env.NODE_ENV === 'development' ? lastErr : undefined
-      });
-    }
-
-    res.json({
-      beta: true,
-      mode,
-      answer: answer.slice(0, 2500)
-    });
-  } catch (err) {
-    console.error('[AI] erro:', err);
-    res.status(500).json({ error: 'Erro interno na IA.' });
-  }
 });
 
 // ==================== INICIALIZAÇÃO ====================

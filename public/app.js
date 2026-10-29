@@ -29,7 +29,7 @@ let isScreenSharing = false;
 let isCameraOn = false;
 let isMicOn = false;
 let isAudioMuted = false;
-let noiseSuppressionOn = true;   // supressão de ruído ligada por padrão
+let noiseSuppressionOn = false;  // RNNoise removido da UI
 let currentFacingMode = 'user';  // câmera frontal por padrão
 let streamQuality = 'high';      // qualidade padrão
 let pendingStreamType = null;    // 'screen' | 'camera' — aguardando modal de qualidade
@@ -102,6 +102,54 @@ function nameColor(name) {
   let h = 0;
   for (let i = 0; i < (name || '').length; i++) h = (h * 31 + name.charCodeAt(i)) & 0xffff;
   return colors[h % colors.length];
+}
+
+
+// ==================== SONS DE NOTIFICAÇÃO ====================
+let _audioCtx = null;
+function getAudioCtx() {
+  if (!_audioCtx) {
+    try { _audioCtx = new (window.AudioContext || window.webkitAudioContext)(); } catch (_) {}
+  }
+  if (_audioCtx && _audioCtx.state === 'suspended') _audioCtx.resume().catch(() => {});
+  return _audioCtx;
+}
+/** type: message | join | leave */
+function playSound(type) {
+  try {
+    const ctx = getAudioCtx();
+    if (!ctx) return;
+    const now = ctx.currentTime;
+    const o = ctx.createOscillator();
+    const g = ctx.createGain();
+    o.connect(g); g.connect(ctx.destination);
+    if (type === 'join') {
+      o.type = 'sine';
+      o.frequency.setValueAtTime(520, now);
+      o.frequency.exponentialRampToValueAtTime(780, now + 0.12);
+      g.gain.setValueAtTime(0.0001, now);
+      g.gain.exponentialRampToValueAtTime(0.12, now + 0.02);
+      g.gain.exponentialRampToValueAtTime(0.0001, now + 0.28);
+      o.start(now); o.stop(now + 0.3);
+    } else if (type === 'leave') {
+      o.type = 'triangle';
+      o.frequency.setValueAtTime(420, now);
+      o.frequency.exponentialRampToValueAtTime(220, now + 0.2);
+      g.gain.setValueAtTime(0.0001, now);
+      g.gain.exponentialRampToValueAtTime(0.1, now + 0.02);
+      g.gain.exponentialRampToValueAtTime(0.0001, now + 0.32);
+      o.start(now); o.stop(now + 0.35);
+    } else {
+      // message — bip curto
+      o.type = 'sine';
+      o.frequency.setValueAtTime(880, now);
+      o.frequency.exponentialRampToValueAtTime(660, now + 0.08);
+      g.gain.setValueAtTime(0.0001, now);
+      g.gain.exponentialRampToValueAtTime(0.09, now + 0.01);
+      g.gain.exponentialRampToValueAtTime(0.0001, now + 0.15);
+      o.start(now); o.stop(now + 0.16);
+    }
+  } catch (_) {}
 }
 
 function showToast(msg, type) {
@@ -183,6 +231,7 @@ function setupSocketListeners() {
     updateParticipantCount();
     renderParticipantsList();
     showToast(`${data.name} entrou na sala`, 'info');
+    playSound('join');
     const pc = connectToPeer(data.id);
     // Se já estamos transmitindo (tela com som do sistema incluso), reenvia tudo
     if (pc && (isScreenSharing || isCameraOn || getOutboundAudioTrack())) {
@@ -224,6 +273,7 @@ function setupSocketListeners() {
     updateParticipantCount();
     renderParticipantsList();
     showToast(`${data.name} saiu da sala`, 'info');
+    playSound('leave');
   });
 
   socket.on('stream-started', (data) => {
@@ -451,13 +501,21 @@ async function optimizeVideoSender(sender) {
   try {
     const params = sender.getParameters();
     if (!params.encodings || !params.encodings.length) params.encodings = [{}];
+    const q = (typeof QUALITY_PRESETS !== 'undefined' && QUALITY_PRESETS[streamQuality])
+      ? QUALITY_PRESETS[streamQuality]
+      : { bitrate: 2500000, frameRate: 30, scale: 1 };
     const n = Math.max(1, peers.size);
-    const isScreen = isScreenSharing;
-    params.encodings[0].maxBitrate = isScreen
-      ? Math.round(Math.min(2_500_000, Math.max(700_000, 2_200_000 / Math.sqrt(n))))
-      : Math.round(Math.min(1_200_000, Math.max(350_000, 900_000 / Math.sqrt(n))));
-    params.encodings[0].maxFramerate = isScreen ? 24 : 24;
-    params.degradationPreference = isScreen ? 'maintain-resolution' : 'balanced';
+    // Bitrate conforme qualidade escolhida; divide levemente com muitos peers
+    let br = q.bitrate || 2500000;
+    if (n > 2) br = Math.round(br / Math.sqrt(n / 2));
+    params.encodings[0].maxBitrate = br;
+    params.encodings[0].maxFramerate = q.frameRate || 30;
+    if (q.scale && q.scale > 1) {
+      params.encodings[0].scaleResolutionDownBy = q.scale;
+    } else {
+      params.encodings[0].scaleResolutionDownBy = 1;
+    }
+    params.degradationPreference = isScreenSharing ? 'maintain-framerate' : 'balanced';
     await sender.setParameters(params);
   } catch (_) {}
 }
@@ -1723,7 +1781,6 @@ function leaveRoom(notify = true) {
   peerVolumes.clear();
   hideTileVolumeMenu();
   document.querySelectorAll('audio[id^="remote-audio-"]').forEach(a => a.remove());
-  closeAiPanel();
 
   if (notify && socket) socket.emit('leave-room');
 
@@ -1845,10 +1902,12 @@ function updateToolbarUI() {
   btnAudio.className = `toolbar-btn ${isAudioMuted ? 'muted-audio' : 'active-audio'}`;
   btnAudio.querySelector('.btn-label').textContent = isAudioMuted ? 'Mudo' : 'Áudio';
 
-  // Select de qualidade — destacar quando transmitindo
+  // Qualidade só aparece quando transmitindo TELA (não câmera)
   const qualityWrap = document.getElementById('quality-select-wrap');
   if (qualityWrap) {
-    qualityWrap.classList.toggle('broadcasting', isCameraOn || isScreenSharing);
+    const showQ = !!isScreenSharing;
+    qualityWrap.classList.toggle('hidden', !showQ);
+    qualityWrap.classList.toggle('broadcasting', showQ);
   }
 }
 
@@ -2040,15 +2099,46 @@ function saveProfile() {
 
 function handlePhotoUpload(file) {
   if (!file) return;
-  if (file.size > 3 * 1024 * 1024) {
-    showToast('Arquivo muito grande. Use até 3MB ou cole uma URL.', 'error');
+  if (file.size > 4 * 1024 * 1024) {
+    showToast('Arquivo muito grande. Use até 4MB ou cole uma URL de GIF.', 'error');
     return;
   }
+  // GIF: manter animação (data URL direto se caber)
+  if (/image\/gif/i.test(file.type) || /\.gif$/i.test(file.name)) {
+    if (file.size > 900 * 1024) {
+      showToast('GIF grande demais. Use URL do Tenor/Giphy ou arquivo até ~900KB.', 'error');
+      return;
+    }
+    const reader = new FileReader();
+    reader.onload = (e) => {
+      const photoEl = document.getElementById('profile-photo-url');
+      if (photoEl) photoEl.value = e.target.result;
+      updateAvatarPreview();
+    };
+    reader.readAsDataURL(file);
+    return;
+  }
+  // Imagem estática: comprimir para caber no socket
   const reader = new FileReader();
   reader.onload = (e) => {
-    const photoEl = document.getElementById('profile-photo-url');
-    if (photoEl) photoEl.value = e.target.result;
-    updateAvatarPreview();
+    const img = new Image();
+    img.onload = () => {
+      const max = 160;
+      let w = img.width, h = img.height;
+      if (w > max || h > max) {
+        if (w > h) { h = Math.round(h * max / w); w = max; }
+        else { w = Math.round(w * max / h); h = max; }
+      }
+      const c = document.createElement('canvas');
+      c.width = w; c.height = h;
+      c.getContext('2d').drawImage(img, 0, 0, w, h);
+      const dataUrl = c.toDataURL('image/jpeg', 0.82);
+      const photoEl = document.getElementById('profile-photo-url');
+      if (photoEl) photoEl.value = dataUrl;
+      updateAvatarPreview();
+    };
+    img.onerror = () => showToast('Não foi possível ler a imagem', 'error');
+    img.src = e.target.result;
   };
   reader.readAsDataURL(file);
 }
@@ -2420,13 +2510,13 @@ document.getElementById('modal-themes').addEventListener('click', e => {
 function setupChatListeners() {
   socket.on('chat-message', (msg) => {
     addChatMessage(msg);
-    // Notificar se chat estiver fechado
+    // Som de mensagem (não toca para a própria msg se quiser — toca para todas)
+    if (msg.id !== myId) playSound('message');
     if (!chatOpen) {
       chatUnread++;
       const badge = document.getElementById('chat-badge');
       badge.textContent = chatUnread > 99 ? '99+' : chatUnread;
       badge.classList.remove('hidden');
-      // Toast discreto
       showToast(`💬 ${msg.name}: ${msg.text.slice(0, 40)}${msg.text.length > 40 ? '...' : ''}`, 'info');
     }
   });
@@ -2434,25 +2524,38 @@ function setupChatListeners() {
 
 function addChatMessage(msg) {
   const container = document.getElementById('chat-messages');
+  if (!container) return;
   const isMe = msg.id === myId;
   const col  = nameColor(msg.name);
   const time = new Date(msg.time).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' });
+  const init = nameInitial(msg.name);
+  // Preferir foto da msg; se for eu, fallback para loadPhoto()
+  let photo = msg.photoUrl || '';
+  if (isMe && !photo) photo = loadPhoto() || '';
+  if (!isMe && !photo) {
+    const p = participants.get(msg.id);
+    if (p && p.photoUrl) photo = p.photoUrl;
+  }
 
   const div = document.createElement('div');
   div.className = `chat-msg${isMe ? ' own' : ''}`;
 
-  const avatarHtml = msg.photoUrl
-    ? `<div class="chat-msg-avatar"><img src="${msg.photoUrl}" onerror="this.parentElement.textContent='${nameInitial(msg.name)}'"></div>`
-    : `<div class="chat-msg-avatar" style="background:linear-gradient(135deg,${col},${col}88)">${nameInitial(msg.name)}</div>`;
+  let avatarHtml;
+  if (photo) {
+    const safePhoto = photo.replace(/"/g, '&quot;');
+    avatarHtml = `<div class="chat-msg-avatar has-img"><img src="${safePhoto}" alt="${init}" loading="lazy" onerror="this.remove();this.parentElement.textContent='${init}';this.parentElement.classList.remove('has-img');"></div>`;
+  } else {
+    avatarHtml = `<div class="chat-msg-avatar" style="background:linear-gradient(135deg,${col},${col}88)">${init}</div>`;
+  }
 
   div.innerHTML = `
     ${avatarHtml}
     <div class="chat-msg-body">
       <div class="chat-msg-header">
-        <span class="chat-msg-name">${msg.name}</span>
+        <span class="chat-msg-name">${(msg.name || '').replace(/</g,'&lt;')}</span>
         <span class="chat-msg-time">${time}</span>
       </div>
-      <div class="chat-msg-text">${msg.text.replace(/</g,'&lt;').replace(/>/g,'&gt;')}</div>
+      <div class="chat-msg-text">${(msg.text || '').replace(/</g,'&lt;').replace(/>/g,'&gt;')}</div>
     </div>`;
 
   container.appendChild(div);
@@ -2494,163 +2597,6 @@ document.getElementById('btn-chat-send').addEventListener('click', sendChatMessa
 document.getElementById('chat-input').addEventListener('keypress', e => {
   if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendChatMessage(); }
 });
-
-// ==================== IA BETA ====================
-
-let aiOpen = false;
-let aiBusy = false;
-let aiEnabled = true; // atualizado via /api/ai/status
-
-/** Base do backend (Render). Evita chamar Netlify estático e achar que a IA está off. */
-function apiBase() {
-  const base = (window.SOCKET_URL || location.origin || '').replace(/\/$/, '');
-  return base || location.origin;
-}
-
-async function checkAiStatus() {
-  try {
-    const r = await fetch(apiBase() + '/api/ai/status', { credentials: 'omit' });
-    const data = await r.json().catch(() => ({}));
-    aiEnabled = !!data.enabled;
-    const btn = document.getElementById('btn-ai');
-    if (btn) btn.classList.remove('hidden');
-    if (!aiEnabled) {
-      console.warn('[IA] Configure GEMINI_API_KEY e AI_BETA_ENABLED=true no Render.');
-    }
-  } catch (err) {
-    console.warn('[IA] status falhou:', err && err.message);
-    // Não esconde o botão; a pergunta real mostra o erro
-    aiEnabled = true;
-    const btn = document.getElementById('btn-ai');
-    if (btn) btn.classList.remove('hidden');
-  }
-}
-
-function toggleAiPanel() {
-  const panel = document.getElementById('ai-panel');
-  aiOpen = !aiOpen;
-  panel.classList.toggle('hidden', !aiOpen);
-  if (aiOpen) {
-    chatOpen = false;
-    document.getElementById('chat-panel').classList.add('hidden');
-    setTimeout(() => {
-      const inp = document.getElementById('ai-input');
-      if (inp) inp.focus();
-    }, 80);
-    // Revalida status ao abrir
-    checkAiStatus();
-  }
-}
-
-function closeAiPanel() {
-  aiOpen = false;
-  document.getElementById('ai-panel').classList.add('hidden');
-}
-
-function appendAiBubble(role, text, extraClass) {
-  const box = document.getElementById('ai-messages');
-  if (!box) return null;
-  const welcome = box.querySelector('.ai-welcome');
-  if (welcome) welcome.remove();
-
-  const div = document.createElement('div');
-  div.className = `ai-bubble ${role}${extraClass ? ' ' + extraClass : ''}`;
-  if (role === 'bot') {
-    div.innerHTML = `<span class="ai-bubble-label">IA Beta</span>${escapeHtml(text)}`;
-  } else {
-    div.textContent = text;
-  }
-  box.appendChild(div);
-  box.scrollTop = box.scrollHeight;
-  return div;
-}
-
-async function askAi(prompt, mode) {
-  prompt = (prompt || '').trim();
-  if (!prompt || aiBusy) return;
-
-  const game = (document.getElementById('ai-game') && document.getElementById('ai-game').value || '').trim();
-  mode = mode || 'chat';
-
-  aiBusy = true;
-  document.querySelectorAll('.ai-chip').forEach(c => { c.disabled = true; });
-  appendAiBubble('user', prompt);
-  const loading = appendAiBubble('bot', 'Pensando…', 'loading');
-
-  try {
-    const r = await fetch(apiBase() + '/api/ai/assist', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ prompt, mode, game }),
-      credentials: 'omit'
-    });
-    const data = await r.json().catch(() => ({}));
-    if (loading) loading.remove();
-    if (!r.ok) {
-      const msg = data.error || 'Falha ao consultar a IA.';
-      appendAiBubble('bot', msg, 'error');
-      if (/não configurada|desativada|GEMINI/i.test(msg)) {
-        showToast('No Render: defina GEMINI_API_KEY e AI_BETA_ENABLED=true', 'info');
-      }
-    } else {
-      aiEnabled = true;
-      appendAiBubble('bot', data.answer || 'Sem resposta.');
-    }
-  } catch (err) {
-    if (loading) loading.remove();
-    appendAiBubble('bot', 'Erro de rede ao falar com a IA. Confira se o backend (Render) está online.', 'error');
-  } finally {
-    aiBusy = false;
-    document.querySelectorAll('.ai-chip').forEach(c => { c.disabled = false; });
-  }
-}
-
-function sendAiFromInput() {
-  const input = document.getElementById('ai-input');
-  if (!input) return;
-  const text = input.value.trim();
-  if (!text) return;
-  input.value = '';
-  askAi(text, 'chat');
-}
-
-const btnAi = document.getElementById('btn-ai');
-if (btnAi) btnAi.addEventListener('click', toggleAiPanel);
-const btnCloseAi = document.getElementById('btn-close-ai');
-if (btnCloseAi) btnCloseAi.addEventListener('click', closeAiPanel);
-const btnAiSend = document.getElementById('btn-ai-send');
-if (btnAiSend) btnAiSend.addEventListener('click', sendAiFromInput);
-const aiInput = document.getElementById('ai-input');
-if (aiInput) {
-  aiInput.addEventListener('keypress', e => {
-    if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendAiFromInput(); }
-  });
-}
-document.querySelectorAll('.ai-chip').forEach(chip => {
-  chip.addEventListener('click', () => {
-    const mode = chip.dataset.mode || 'chat';
-    const prompt = chip.dataset.prompt || '';
-    askAi(prompt, mode);
-  });
-});
-
-// Atalho no chat: mensagens começando com @ia / @bot
-const _origSendChat = sendChatMessage;
-sendChatMessage = function () {
-  const input = document.getElementById('chat-input');
-  const text = (input && input.value || '').trim();
-  const m = text.match(/^@(ia|bot|ai)\s+(.+)/i);
-  if (m) {
-    input.value = '';
-    if (!aiOpen) toggleAiPanel();
-    askAi(m[2], 'chat');
-    return;
-  }
-  _origSendChat();
-};
-
-// Verifica se a IA está ligada ao carregar
-checkAiStatus();
 
 // ==================== FLIP CÂMERA (mobile) ====================
 
@@ -2798,23 +2744,26 @@ async function toggleNoiseSuppression() {
   }
 
   const btn = document.getElementById('btn-noise');
-  if (noiseSuppressionOn) {
-    btn.className = 'toolbar-btn active-noise';
-    btn.querySelector('.btn-label').textContent = 'RNNoise';
-  } else {
-    btn.className = 'toolbar-btn off-noise';
-    btn.querySelector('.btn-label').textContent = 'Ruído Off';
+  if (btn) {
+    if (noiseSuppressionOn) {
+      btn.className = 'toolbar-btn active-noise';
+      const lab = btn.querySelector('.btn-label');
+      if (lab) lab.textContent = 'RNNoise';
+    } else {
+      btn.className = 'toolbar-btn off-noise';
+      const lab = btn.querySelector('.btn-label');
+      if (lab) lab.textContent = 'Ruído Off';
+    }
   }
 }
 
-document.getElementById('btn-noise').addEventListener('click', toggleNoiseSuppression);
 
 // ==================== QUALIDADE DE TRANSMISSÃO ====================
 
 const QUALITY_PRESETS = {
-  high:   { width: 1920, height: 1080, frameRate: 30, bitrate: 2500000 },
-  medium: { width: 1280, height: 720,  frameRate: 30, bitrate: 1200000 },
-  low:    { width: 854,  height: 480,  frameRate: 15, bitrate:  500000 }
+  high:   { width: 1920, height: 1080, frameRate: 30, bitrate: 2800000, scale: 1 },
+  medium: { width: 1280, height: 720,  frameRate: 24, bitrate: 1200000, scale: 1.5 },
+  low:    { width: 854,  height: 480,  frameRate: 15, bitrate:  450000, scale: 2.5 }
 };
 
 // ==================== SELECT DE QUALIDADE (inline na toolbar) ====================
@@ -2826,33 +2775,27 @@ document.getElementById('quality-select').addEventListener('change', async (e) =
   const q = QUALITY_PRESETS[streamQuality];
   if (!q) return;
 
-  // Se câmera ativa, reaplicar constraints em tempo real
-  if (isCameraOn && cameraStream) {
-    const videoTrack = cameraStream.getVideoTracks()[0];
-    if (videoTrack) {
-      try {
-        await videoTrack.applyConstraints({
-          width:     { ideal: isMobile() ? Math.min(q.width, 640)  : q.width  },
-          height:    { ideal: isMobile() ? Math.min(q.height, 480) : q.height },
-          frameRate: { ideal: q.frameRate }
-        });
-        // Atualizar bitrate nos senders
-        for (const [, entry] of peers) {
-          if (!entry.pc) continue;
-          const vs = entry.pc.getSenders().find(s => s.track && s.track.kind === 'video');
-          if (vs) optimizeVideoSenderWithPreset(vs, q);
-        }
-        showToast(`Qualidade: ${e.target.options[e.target.selectedIndex].text}`, 'success');
-      } catch (err) {
-        console.warn('applyConstraints falhou, recriando câmera:', err);
-        await stopCamera();
-        await startCamera();
+  // Qualidade só afeta transmissão de TELA (bitrate + scale no WebRTC)
+  if (isScreenSharing) {
+    let applied = 0;
+    for (const [, entry] of peers) {
+      if (!entry.pc) continue;
+      const vs = entry.pc.getSenders().find(s => s.track && s.track.kind === 'video');
+      if (vs) {
+        await optimizeVideoSenderWithPreset(vs, q);
+        applied++;
       }
     }
-  } else if (isScreenSharing && screenStream) {
-    showToast(`Qualidade ${e.target.options[e.target.selectedIndex].text} salva`, 'info');
+    // Tenta ajustar frameRate da track de tela (nem sempre o browser aceita)
+    try {
+      const vt = screenStream && screenStream.getVideoTracks()[0];
+      if (vt) {
+        await vt.applyConstraints({ frameRate: { ideal: q.frameRate, max: q.frameRate } });
+      }
+    } catch (_) {}
+    showToast(`Qualidade da tela: ${e.target.options[e.target.selectedIndex].text}`, 'success');
   } else {
-    showToast(`Qualidade definida: ${e.target.options[e.target.selectedIndex].text}`, 'info');
+    showToast('Qualidade só se aplica ao compartilhar tela', 'info');
   }
 });
 
@@ -2861,8 +2804,9 @@ async function optimizeVideoSenderWithPreset(sender, q) {
   try {
     const params = sender.getParameters();
     if (!params.encodings || !params.encodings.length) params.encodings = [{}];
-    params.encodings[0].maxBitrate  = q.bitrate;
+    params.encodings[0].maxBitrate = q.bitrate;
     params.encodings[0].maxFramerate = q.frameRate;
+    params.encodings[0].scaleResolutionDownBy = (q.scale && q.scale > 1) ? q.scale : 1;
     await sender.setParameters(params);
   } catch (_) {}
 }

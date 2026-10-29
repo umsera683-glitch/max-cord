@@ -6,55 +6,55 @@
    TEMAS — variáveis CSS
    ===================================================================== */
 
-/* ---- Dark (padrão) ---- */
+/* ---- Dark Gamer (padrão — estilo arena / torneio) ---- */
 [data-theme="dark"], :root {
-  --bg-root:        #0d0d14;
-  --bg-surface:     rgba(17,17,30,0.88);
-  --bg-surface2:    rgba(255,255,255,0.04);
-  --bg-input:       rgba(255,255,255,0.05);
-  --bg-hover:       rgba(255,255,255,0.07);
-  --bg-active:      rgba(124,58,237,0.18);
-  --bg-sidebar:     rgba(10,10,18,0.97);
-  --bg-header:      rgba(13,13,22,0.97);
-  --bg-toolbar:     rgba(13,13,22,0.97);
-  --bg-video:       #050508;
-  --bg-tile:        #0f0f1a;
-  --bg-modal:       #111120;
+  --bg-root:        #070b16;
+  --bg-surface:     rgba(14, 20, 40, 0.92);
+  --bg-surface2:    rgba(255,255,255,0.05);
+  --bg-input:       rgba(8, 12, 28, 0.85);
+  --bg-hover:       rgba(99, 102, 241, 0.12);
+  --bg-active:      rgba(99, 102, 241, 0.22);
+  --bg-sidebar:     #0a1020;
+  --bg-header:      rgba(8, 12, 24, 0.95);
+  --bg-toolbar:     rgba(8, 12, 24, 0.97);
+  --bg-video:       #05070f;
+  --bg-tile:        #0c1224;
+  --bg-modal:       #0e162c;
 
-  --border:         rgba(255,255,255,0.07);
-  --border-focus:   rgba(124,58,237,0.55);
-  --border-input:   rgba(255,255,255,0.09);
+  --border:         rgba(120, 140, 255, 0.1);
+  --border-focus:   rgba(129, 140, 248, 0.65);
+  --border-input:   rgba(120, 140, 255, 0.14);
 
-  --text-primary:   #e2e8f0;
-  --text-secondary: #94a3b8;
-  --text-muted:     #475569;
-  --text-hint:      #334155;
+  --text-primary:   #eef2ff;
+  --text-secondary: #a5b4d4;
+  --text-muted:     #64748b;
+  --text-hint:      #475569;
 
-  --accent:         #7c3aed;
-  --accent2:        #2563eb;
-  --accent-text:    #c4b5fd;
-  --accent-glow:    rgba(124,58,237,0.4);
+  --accent:         #6366f1;
+  --accent2:        #a855f7;
+  --accent-text:    #c7d2fe;
+  --accent-glow:    rgba(99, 102, 241, 0.45);
 
-  --orb1: #7c3aed;
-  --orb2: #2563eb;
-  --orb3: #0891b2;
+  --orb1: #6366f1;
+  --orb2: #a855f7;
+  --orb3: #06b6d4;
 
-  --btn-primary-bg: linear-gradient(135deg,#7c3aed,#2563eb);
-  --btn-primary-shadow: rgba(124,58,237,0.35);
-  --logo-gradient: linear-gradient(135deg,#a78bfa,#60a5fa);
+  --btn-primary-bg: linear-gradient(135deg, #6366f1 0%, #a855f7 55%, #ec4899 100%);
+  --btn-primary-shadow: rgba(99, 102, 241, 0.4);
+  --logo-gradient: linear-gradient(135deg, #818cf8, #e879f9);
 
-  --tile-border:    rgba(255,255,255,0.05);
-  --tile-label-bg:  linear-gradient(transparent,rgba(0,0,0,0.75));
-  --no-stream-icon: rgba(255,255,255,0.08);
+  --tile-border:    rgba(120, 140, 255, 0.12);
+  --tile-label-bg:  linear-gradient(transparent, rgba(0,0,0,0.8));
+  --no-stream-icon: rgba(255,255,255,0.1);
 
-  --toast-success-bg: rgba(20,83,45,0.92);
-  --toast-success-bd: #166534;
-  --toast-error-bg:   rgba(127,29,29,0.92);
-  --toast-error-bd:   #991b1b;
-  --toast-info-bg:    rgba(23,37,84,0.92);
-  --toast-info-bd:    #1d4ed8;
+  --toast-success-bg: rgba(6, 78, 59, 0.94);
+  --toast-success-bd: #059669;
+  --toast-error-bg:   rgba(127, 29, 29, 0.94);
+  --toast-error-bd:   #ef4444;
+  --toast-info-bg:    rgba(30, 27, 75, 0.94);
+  --toast-info-bd:    #6366f1;
 
-  --scrollbar: #2d2d45;
+  --scrollbar: #1e293b;
 }
 
 /* ---- AMOLED (preto puro) ---- */
@@ -548,13 +548,14 @@ button:active { opacity: 0.82; }
 
 /* ---- Card ---- */
 .card {
-  background: var(--bg-surface);
+  background: linear-gradient(160deg, rgba(18, 26, 52, 0.95) 0%, rgba(12, 16, 36, 0.92) 100%);
   border: 1px solid var(--border);
-  border-radius: 18px;
+  border-radius: 16px;
   padding: 16px;
-  backdrop-filter: blur(16px);
-  -webkit-backdrop-filter: blur(16px);
-  transition: border-color 0.2s, background 0.3s;
+  backdrop-filter: blur(18px);
+  -webkit-backdrop-filter: blur(18px);
+  transition: border-color 0.2s, background 0.3s, box-shadow 0.2s;
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.35);
 }
 
 .card:focus-within { border-color: var(--border-focus); }
@@ -761,29 +762,35 @@ button:active { opacity: 0.82; }
 
 .room-list-item {
   display: flex; align-items: center; justify-content: space-between; gap: 12px;
-  padding: 12px 14px;
-  background: var(--bg-surface2);
+  padding: 14px 16px;
+  background: linear-gradient(135deg, rgba(30, 40, 80, 0.55), rgba(15, 20, 45, 0.7));
   border: 1px solid var(--border);
-  border-radius: 12px; cursor: pointer;
-  transition: border-color 0.2s, background 0.2s;
+  border-radius: 14px; cursor: pointer;
+  transition: border-color 0.2s, background 0.2s, transform 0.15s, box-shadow 0.2s;
 }
 
-.room-list-item:hover { border-color: var(--border-focus); background: var(--bg-active); }
+.room-list-item:hover {
+  border-color: var(--border-focus);
+  background: linear-gradient(135deg, rgba(50, 40, 100, 0.55), rgba(20, 30, 70, 0.75));
+  box-shadow: 0 0 0 1px rgba(99,102,241,0.25), 0 8px 24px rgba(0,0,0,0.35);
+  transform: translateY(-1px);
+}
 .room-list-item .room-info { flex: 1; min-width: 0; }
-.room-list-item .room-title { font-size: 14px; font-weight: 600; color: var(--text-primary); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.room-list-item .room-meta  { font-size: 11px; color: var(--text-muted); margin-top: 2px; }
+.room-list-item .room-title { font-size: 14px; font-weight: 700; color: var(--text-primary); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; letter-spacing: 0.2px; }
+.room-list-item .room-meta  { font-size: 11px; color: var(--text-muted); margin-top: 3px; }
 
 .room-list-item .room-join-btn {
-  font-size: 12px; font-weight: 600;
-  color: var(--accent-text);
-  background: var(--bg-active);
-  border: 1px solid color-mix(in srgb, var(--accent) 30%, transparent);
-  border-radius: 8px; padding: 5px 12px;
+  font-size: 12px; font-weight: 700;
+  color: #fff;
+  background: var(--btn-primary-bg);
+  border: none;
+  border-radius: 10px; padding: 7px 14px;
   flex-shrink: 0; white-space: nowrap;
-  transition: background 0.2s;
+  transition: opacity 0.2s, transform 0.15s;
+  box-shadow: 0 4px 14px var(--btn-primary-shadow);
 }
 
-.room-list-item:hover .room-join-btn { background: color-mix(in srgb, var(--accent) 25%, transparent); }
+.room-list-item:hover .room-join-btn { opacity: 0.95; transform: scale(1.03); }
 
 /* ---- Seletor de temas ---- */
 .theme-grid {
@@ -1377,16 +1384,22 @@ button:active { opacity: 0.82; }
 }
 
 .chat-msg-avatar {
-  width: 26px; height: 26px;
-  border-radius: 50%;
+  width: 32px; height: 32px;
+  border-radius: 10px;
   background: var(--btn-primary-bg);
   display: flex; align-items: center; justify-content: center;
-  font-size: 11px; font-weight: 700; color: #fff;
+  font-size: 12px; font-weight: 700; color: #fff;
   flex-shrink: 0; overflow: hidden;
+  border: 1px solid rgba(255,255,255,0.12);
+}
+
+.chat-msg-avatar.has-img {
+  background: transparent;
 }
 
 .chat-msg-avatar img {
-  width: 100%; height: 100%; object-fit: cover; border-radius: 50%;
+  width: 100%; height: 100%; object-fit: cover; border-radius: 9px;
+  display: block;
 }
 
 .chat-msg-body { flex: 1; min-width: 0; }
@@ -2049,4 +2062,50 @@ html, body {
     width: min(300px, 90vw);
     box-shadow: -8px 0 28px rgba(0,0,0,0.5);
   }
+}
+
+/* ===================== GAMER POLISH ===================== */
+body {
+  background: var(--bg-root);
+  color: var(--text-primary);
+}
+
+.lobby-bg-orb { opacity: 0.22; }
+
+.logo-name {
+  background: var(--logo-gradient);
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+  font-weight: 800;
+  letter-spacing: -0.5px;
+}
+
+.badge {
+  background: rgba(99, 102, 241, 0.12);
+  border: 1px solid rgba(99, 102, 241, 0.25);
+  color: var(--accent-text);
+}
+
+.room-toolbar {
+  background: linear-gradient(180deg, rgba(10, 14, 28, 0.2), rgba(8, 12, 24, 0.98));
+  border-top: 1px solid rgba(120, 140, 255, 0.12);
+}
+
+.toolbar-btn {
+  border-radius: 12px;
+}
+
+.quality-select-wrap.hidden {
+  display: none !important;
+}
+
+.stream-tile {
+  border: 1px solid var(--tile-border);
+  box-shadow: 0 8px 28px rgba(0,0,0,0.4);
+}
+
+.room-header {
+  background: linear-gradient(90deg, rgba(8,12,24,0.98), rgba(14,18,40,0.95));
+  border-bottom: 1px solid rgba(120, 140, 255, 0.1);
 }
