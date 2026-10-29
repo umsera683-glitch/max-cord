@@ -177,7 +177,20 @@ function supportsScreenShare() {
 
 function saveName(n) { try { localStorage.setItem('sh_username', n); } catch (_) {} }
 function loadName()  { try { return localStorage.getItem('sh_username') || ''; } catch (_) { return ''; } }
-function savePhoto(url) { try { localStorage.setItem('sh_photo', url); } catch (_) {} }
+function savePhoto(url) {
+  try {
+    localStorage.setItem('sh_photo', url || '');
+  } catch (err) {
+    // Quota: tenta salvar só se for URL curta
+    try {
+      if (url && url.length < 2000) localStorage.setItem('sh_photo', url);
+      else {
+        localStorage.removeItem('sh_photo');
+        showToast('Foto grande demais para salvar no navegador. Use uma URL de GIF/imagem.', 'error');
+      }
+    } catch (_) {}
+  }
+}
 function loadPhoto()    { try { return localStorage.getItem('sh_photo') || ''; } catch (_) { return ''; } }
 
 // ==================== SOCKET ====================
@@ -1840,23 +1853,27 @@ function renderParticipantsList() {
     const div = document.createElement('div');
     div.className = 'participant-item';
 
-    // Avatar: foto/GIF se disponível, senão inicial com cor
-    const avatarHtml = photoUrl
-      ? `<div class="avatar avatar-sm" style="background:transparent;padding:0">
-           <img src="${photoUrl}" alt="${nameInitial(name)}"
-             style="width:100%;height:100%;object-fit:cover;border-radius:50%;display:block"
-             onerror="this.parentElement.innerHTML='${nameInitial(name)}';this.parentElement.style.background='linear-gradient(135deg,${col},${col}88)'">
-         </div>`
-      : `<div class="avatar avatar-sm" style="background:linear-gradient(135deg,${col},${col}88)">${nameInitial(name)}</div>`;
+    const av = document.createElement('div');
+    av.className = 'avatar avatar-sm';
+    applyAvatarTo(av, name, photoUrl || '');
 
-    div.innerHTML = `
-      ${avatarHtml}
-      <span class="p-name">${name}${isMe ? ' <span style="font-size:10px;color:var(--accent-text)">(você)</span>' : ''}</span>
-      <div class="p-badges">
-        ${owner   ? '<span class="p-badge">👑</span>' : ''}
-        ${vidIcon ? `<span class="p-badge">${vidIcon}</span>` : ''}
-        ${micIcon ? `<span class="p-badge">${micIcon}</span>` : ''}
-      </div>`;
+    const nameSpan = document.createElement('span');
+    nameSpan.className = 'p-name';
+    nameSpan.textContent = name + (isMe ? ' ' : '');
+    if (isMe) {
+      const you = document.createElement('span');
+      you.style.cssText = 'font-size:10px;color:var(--accent-text)';
+      you.textContent = '(você)';
+      nameSpan.appendChild(you);
+    }
+    const badges = document.createElement('div');
+    badges.className = 'p-badges';
+    if (owner) { const s = document.createElement('span'); s.className = 'p-badge'; s.textContent = '👑'; badges.appendChild(s); }
+    if (vidIcon) { const s = document.createElement('span'); s.className = 'p-badge'; s.textContent = vidIcon; badges.appendChild(s); }
+    if (micIcon) { const s = document.createElement('span'); s.className = 'p-badge'; s.textContent = micIcon; badges.appendChild(s); }
+    div.appendChild(av);
+    div.appendChild(nameSpan);
+    div.appendChild(badges);
     list.appendChild(div);
   };
 
@@ -2030,15 +2047,32 @@ function checkShowForgotButton() {
 // ==================== PERFIL ====================
 
 function applyAvatarTo(el, name, photoUrl) {
-  if (photoUrl) {
-    const safeInit = nameInitial(name);
-    const safeColor = nameColor(name);
-    el.innerHTML = `<img src="${photoUrl}" alt="${safeInit}" style="width:100%;height:100%;object-fit:cover;border-radius:50%;display:block" onerror="this.parentElement.textContent='${safeInit}';this.parentElement.style.background='linear-gradient(135deg,${safeColor},${safeColor}88)'">`;
+  if (!el) return;
+  const safeInit = nameInitial(name);
+  const safeColor = nameColor(name);
+  const url = (photoUrl || '').trim();
+  while (el.firstChild) el.removeChild(el.firstChild);
+  if (url && (/^https?:\/\//i.test(url) || /^data:image\//i.test(url))) {
     el.style.background = 'transparent';
     el.style.padding = '0';
+    el.classList.add('has-photo');
+    const img = document.createElement('img');
+    img.alt = safeInit;
+    img.decoding = 'async';
+    img.referrerPolicy = 'no-referrer';
+    img.style.cssText = 'width:100%;height:100%;object-fit:cover;border-radius:inherit;display:block;';
+    img.onerror = () => {
+      while (el.firstChild) el.removeChild(el.firstChild);
+      el.classList.remove('has-photo');
+      el.textContent = safeInit;
+      el.style.background = `linear-gradient(135deg, ${safeColor}, ${safeColor}88)`;
+    };
+    img.src = url;
+    el.appendChild(img);
   } else {
-    el.innerHTML = nameInitial(name);
-    el.style.background = `linear-gradient(135deg, ${nameColor(name)}, ${nameColor(name)}88)`;
+    el.classList.remove('has-photo');
+    el.textContent = safeInit;
+    el.style.background = `linear-gradient(135deg, ${safeColor}, ${safeColor}88)`;
     el.style.padding = '';
   }
 }
@@ -2055,17 +2089,24 @@ function showProfileView() {
   const photo = loadPhoto();
   const viewEl = document.getElementById('profile-view');
   const editEl = document.getElementById('profile-edit');
+  const nameEl = document.getElementById('profile-name-display');
+  const dispAv = document.getElementById('profile-avatar-display');
+
+  if (nameEl) nameEl.textContent = name || '—';
+  if (dispAv) applyAvatarTo(dispAv, name || '?', photo);
+
   if (!viewEl || !editEl) return;
 
+  const card = document.getElementById('profile-card');
+  // Com apelido: só sidebar; esconde formulário
   if (name) {
-    document.getElementById('profile-name-display').textContent = name;
-    const dispAv = document.getElementById('profile-avatar-display');
-    if (dispAv) applyAvatarTo(dispAv, name, photo);
-    viewEl.classList.remove('hidden');
+    viewEl.classList.add('hidden');
     editEl.classList.add('hidden');
+    if (card) card.classList.add('hidden');
   } else {
     viewEl.classList.add('hidden');
     editEl.classList.remove('hidden');
+    if (card) card.classList.remove('hidden');
     updateAvatarPreview();
   }
 }
@@ -2075,10 +2116,17 @@ function enterEditMode() {
   const photo = loadPhoto();
   const usernameEl = document.getElementById('global-username');
   const photoEl    = document.getElementById('profile-photo-url');
+  const editEl     = document.getElementById('profile-edit');
   if (usernameEl) usernameEl.value = name;
   if (photoEl)    photoEl.value    = photo;
-  document.getElementById('profile-view').classList.add('hidden');
-  document.getElementById('profile-edit').classList.remove('hidden');
+  if (editEl) editEl.classList.remove('hidden');
+  const viewEl = document.getElementById('profile-view');
+  if (viewEl) viewEl.classList.add('hidden');
+  const card = document.getElementById('profile-card');
+  if (card) {
+    card.classList.remove('hidden');
+    card.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  }
   updateAvatarPreview();
   setTimeout(() => usernameEl && usernameEl.focus(), 50);
 }
@@ -2543,24 +2591,23 @@ function addChatMessage(msg) {
   const div = document.createElement('div');
   div.className = `chat-msg${isMe ? ' own' : ''}`;
 
-  let avatarHtml;
-  if (photo) {
-    const safePhoto = photo.replace(/"/g, '&quot;');
-    avatarHtml = `<div class="chat-msg-avatar has-img"><img src="${safePhoto}" alt="${init}" loading="lazy" onerror="this.remove();this.parentElement.textContent='${init}';this.parentElement.classList.remove('has-img');"></div>`;
-  } else {
-    avatarHtml = `<div class="chat-msg-avatar" style="background:linear-gradient(135deg,${col},${col}88)">${init}</div>`;
-  }
-
-  div.innerHTML = `
-    ${avatarHtml}
-    <div class="chat-msg-body">
+  const body = document.createElement('div');
+  body.className = 'chat-msg-body';
+  body.innerHTML = `
       <div class="chat-msg-header">
-        <span class="chat-msg-name">${(msg.name || '').replace(/</g,'&lt;')}</span>
+        <span class="chat-msg-name"></span>
         <span class="chat-msg-time">${time}</span>
       </div>
-      <div class="chat-msg-text">${(msg.text || '').replace(/</g,'&lt;').replace(/>/g,'&gt;')}</div>
-    </div>`;
+      <div class="chat-msg-text"></div>`;
+  body.querySelector('.chat-msg-name').textContent = msg.name || '';
+  body.querySelector('.chat-msg-text').textContent = msg.text || '';
 
+  const av = document.createElement('div');
+  av.className = 'chat-msg-avatar';
+  applyAvatarTo(av, msg.name || '?', photo);
+
+  div.appendChild(av);
+  div.appendChild(body);
   container.appendChild(div);
   container.scrollTop = container.scrollHeight;
 }

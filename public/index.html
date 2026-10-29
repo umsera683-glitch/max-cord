@@ -26,11 +26,10 @@
 </head>
 <body>
 
-<!-- ===================== LOBBY (Arena Gamer) ===================== -->
+<!-- ===================== LOBBY (Arena limpa) ===================== -->
 <div id="lobby-view" class="lobby-root arena-layout">
 
-  <!-- Sidebar -->
-  <aside class="arena-sidebar" aria-label="Navegação">
+  <aside class="arena-sidebar" aria-label="Menu">
     <div class="arena-side-top">
       <div class="arena-brand">
         <img src="/logo.png" alt="" class="arena-brand-logo">
@@ -41,40 +40,19 @@
           <div id="profile-avatar-display" class="arena-user-avatar">?</div>
         </div>
         <div class="arena-user-meta">
-          <p class="arena-user-hello">Olá</p>
           <p id="profile-name-display" class="arena-user-name">—</p>
+          <button type="button" id="btn-edit-profile" class="arena-edit-link">Editar perfil</button>
         </div>
       </div>
     </div>
 
     <nav class="arena-nav">
-      <p class="arena-nav-label">Navegação</p>
-      <button type="button" class="arena-nav-item active" data-scroll="arena-hero">
-        <span class="ani">⌂</span> Início
-      </button>
-      <button type="button" class="arena-nav-item" data-scroll="section-rooms">
-        <span class="ani">▣</span> Salas
-      </button>
-      <button type="button" class="arena-nav-item" data-scroll="section-create">
-        <span class="ani">＋</span> Criar sala
-      </button>
-      <button type="button" class="arena-nav-item" data-scroll="section-join">
-        <span class="ani">→</span> Entrar
-      </button>
-      <p class="arena-nav-label">Config</p>
-      <button type="button" class="arena-nav-item" id="btn-edit-profile">
-        <span class="ani">✎</span> Editar perfil
-      </button>
       <button type="button" class="arena-nav-item" id="btn-theme-lobby">
         <span class="ani">◐</span> Tema
       </button>
     </nav>
 
     <div class="arena-side-bottom">
-      <div class="arena-premium-card">
-        <strong>MaxCord Live</strong>
-        <p>Transmita tela e vídeo em tempo real com WebRTC.</p>
-      </div>
       <div class="watermark-lobby arena-credit">
         <span class="watermark-logo">MaxCord</span>
         <span class="watermark-sep">·</span>
@@ -83,66 +61,33 @@
     </div>
   </aside>
 
-  <!-- Conteúdo principal -->
   <div class="arena-main">
-    <header class="arena-topbar">
-      <div class="arena-topbar-left">
-        <span class="arena-pill">Overview</span>
-        <span class="arena-pill muted">Salas ao vivo</span>
-      </div>
-      <div class="arena-topbar-right">
-        <span class="badge"><span class="badge-dot"></span>WebRTC</span>
-        <span class="badge">🔒 Senha</span>
-        <span class="badge">📱 Mobile</span>
-      </div>
-    </header>
-
     <div class="arena-scroll">
 
-      <!-- Hero estilo banner -->
-      <section id="arena-hero" class="arena-hero">
-        <div class="arena-hero-bg" aria-hidden="true"></div>
-        <div class="arena-hero-content">
-          <div class="arena-hero-badge">● ONLINE</div>
-          <h1 class="arena-hero-title">COMPITA · TRANSMITA · JOGUE</h1>
-          <p class="arena-hero-sub">Transmita sua tela e vídeo em tempo real no MaxCord</p>
-          <div class="arena-hero-stats">
-            <div class="arena-stat"><strong id="arena-stat-rooms">—</strong><span>Salas</span></div>
-            <div class="arena-stat"><strong>WebRTC</strong><span>P2P</span></div>
-            <div class="arena-stat"><strong>HD</strong><span>Qualidade</span></div>
-          </div>
-        </div>
-        <div class="arena-hero-art">
-          <img src="/logo.png" alt="MaxCord">
-        </div>
-      </section>
-
-      <!-- Perfil (edição) -->
+      <!-- Perfil edição -->
       <section class="card arena-card" id="profile-card">
-        <div class="card-header">
-          <div class="card-header-left">
-            <div class="section-icon">👤</div>
-            <span class="section-title">Seu Perfil</span>
-          </div>
-        </div>
-        <div id="profile-view" class="profile-view">
-          <p class="profile-hint">Apelido e foto salvos no dispositivo. Use <strong>Editar perfil</strong> na barra lateral.</p>
-        </div>
+        <div id="profile-view" class="hidden"></div>
         <div id="profile-edit" class="hidden">
+          <div class="card-header">
+            <div class="card-header-left">
+              <div class="section-icon">👤</div>
+              <span class="section-title">Seu perfil</span>
+            </div>
+          </div>
           <div class="profile-edit-row">
             <div class="profile-edit-avatar-col">
               <div class="profile-avatar-wrap cursor-pointer" id="profile-edit-avatar-wrap" title="Trocar foto">
                 <div id="avatar-preview" class="avatar avatar-xl">?</div>
                 <div class="avatar-edit-overlay">📷</div>
               </div>
-              <span class="input-hint">Foto / GIF</span>
+              <span class="input-hint">Foto ou GIF</span>
             </div>
             <div class="profile-edit-fields">
               <input type="text" id="global-username" placeholder="Seu apelido" maxlength="20"
                 class="input-field" autocomplete="nickname">
-              <input type="url" id="profile-photo-url" placeholder="URL de imagem ou GIF"
+              <input type="url" id="profile-photo-url" placeholder="URL da imagem ou GIF (Tenor/Giphy)"
                 class="input-field input-sm">
-              <p class="input-hint">Cole um link de imagem ou GIF do Tenor/Giphy</p>
+              <p class="input-hint">Cole um link https://… ou use Upload</p>
             </div>
           </div>
           <input type="file" id="profile-photo-file" accept="image/*,.gif" class="hidden">
@@ -153,7 +98,6 @@
         </div>
       </section>
 
-      <!-- Criar + Entrar -->
       <div class="action-grid arena-action-grid">
         <section class="card card-create arena-card" id="section-create">
           <div class="card-header">
@@ -167,13 +111,10 @@
             <div class="input-row">
               <input type="text" id="create-room-id" placeholder="ID (ou gerar)" maxlength="10"
                 class="input-field flex-1 uppercase">
-              <button id="generate-room-id" class="btn-generate">🎲</button>
+              <button id="generate-room-id" class="btn-generate" type="button">🎲</button>
             </div>
             <input type="password" id="create-password" placeholder="Senha (opcional)" class="input-field">
-            <button id="btn-create-room" class="btn-primary w-full">
-              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg>
-              Criar Sala
-            </button>
+            <button id="btn-create-room" class="btn-primary w-full" type="button">＋ Criar Sala</button>
           </div>
         </section>
 
@@ -190,27 +131,21 @@
             <div>
               <input type="password" id="join-password" placeholder="Senha (se houver)" class="input-field">
               <div class="flex justify-end mt-1">
-                <button id="btn-forgot-password" type="button" class="btn-link hidden">
-                  Esqueci a senha
-                </button>
+                <button id="btn-forgot-password" type="button" class="btn-link hidden">Esqueci a senha</button>
               </div>
             </div>
-            <button id="btn-join-room" class="btn-secondary-solid w-full">
-              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><path d="M15 3h4a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2h-4"/><polyline points="10 17 15 12 10 7"/><line x1="15" y1="12" x2="3" y2="12"/></svg>
-              Entrar
-            </button>
+            <button id="btn-join-room" class="btn-secondary-solid w-full" type="button">→ Entrar</button>
           </div>
         </section>
       </div>
 
-      <!-- Salas -->
       <section class="card arena-card" id="section-rooms">
         <div class="card-header">
           <div class="card-header-left">
             <div class="section-icon section-icon-green">🌐</div>
-            <span class="section-title">Salas em destaque</span>
+            <span class="section-title">Salas disponíveis</span>
           </div>
-          <button id="btn-refresh-rooms" class="btn-ghost-sm">↻ Atualizar</button>
+          <button id="btn-refresh-rooms" class="btn-ghost-sm" type="button">↻ Atualizar</button>
         </div>
         <div id="rooms-list" class="rooms-list arena-rooms-grid">
           <p class="rooms-empty">Nenhuma sala ativa no momento.</p>

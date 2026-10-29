@@ -133,9 +133,9 @@ function sanitizePhotoUrl(val) {
   if (/^data:image\/(png|jpe?g|gif|webp);base64,/i.test(s)) {
     return s.slice(0, 220000);
   }
-  // URL http(s)
+  // URL http(s) — Tenor/Giphy podem ser longas
   if (/^https?:\/\//i.test(s)) {
-    return s.slice(0, 2000).replace(/[<>]/g, '');
+    return s.slice(0, 4000).replace(/[<>"']/g, '');
   }
   return '';
 }
