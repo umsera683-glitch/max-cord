@@ -1,101 +1,75 @@
 /**
- * RNNoise AudioWorkletProcessor
- * Processa áudio em frames de 480 amostras (10ms a 48kHz)
- * usando a biblioteca RNNoise compilada para WASM.
- *
- * RNNoise: https://github.com/xiph/rnnoise
- * Baseado no trabalho do Jitsi Meet (Apache 2.0)
+ * AudioWorklet: Supressão de ruídos aprimorada
+ * - High-pass filter (remove ronco/baixo contínuo)
+ * - Noise gate adaptativo com envelope suave
+ * - Estimativa de piso de ruído (EMA)
+ * Gratuito, 100% no cliente.
  */
-
-/* global sampleRate */
-
-const RNNOISE_FRAME_SIZE = 480; // RNNoise exige frames de 480 amostras
-
-class RNNoiseProcessor extends AudioWorkletProcessor {
+class NoiseSuppressionProcessor extends AudioWorkletProcessor {
   constructor() {
     super();
-    this._buffer    = new Float32Array(RNNOISE_FRAME_SIZE);
-    this._bufferPos = 0;
-    this._rnnoiseState = null;
-    this._module = null;
     this._enabled = true;
-
-    // Receber instância do módulo WASM e estado da thread principal
+    this._hpX1 = 0; this._hpY1 = 0;
+    const fc = 100;
+    const sr = sampleRate || 48000;
+    this._hpA = Math.exp((-2 * Math.PI * fc) / sr);
+    this._gateOpen = 0;
+    this._openThresh = 0.014;
+    this._closeThresh = 0.008;
+    this._attack = 0.35;
+    this._release = 0.06;
+    this._noiseFloor = 0.02;
     this.port.onmessage = (e) => {
-      if (e.data.type === 'init') {
-        this._module = e.data.module;
-        this._rnnoiseState = this._module._rnnoise_create(0);
-        this._heapInput  = this._allocHeap(RNNOISE_FRAME_SIZE);
-        this._heapOutput = this._allocHeap(RNNOISE_FRAME_SIZE);
-      } else if (e.data.type === 'enable') {
-        this._enabled = e.data.value;
-      } else if (e.data.type === 'destroy') {
-        if (this._rnnoiseState && this._module) {
-          this._module._rnnoise_destroy(this._rnnoiseState);
-          this._rnnoiseState = null;
-        }
+      if (!e.data) return;
+      if (e.data.type === 'enable') this._enabled = !!e.data.value;
+      if (e.data.type === 'threshold' && typeof e.data.value === 'number') {
+        this._openThresh = Math.max(0.002, Math.min(0.1, e.data.value));
+        this._closeThresh = this._openThresh * 0.55;
       }
     };
   }
-
-  _allocHeap(size) {
-    const ptr = this._module._malloc(size * 4); // Float32 = 4 bytes
-    return { ptr, arr: new Float32Array(this._module.HEAPF32.buffer, ptr, size) };
-  }
-
-  process(inputs) {
+  process(inputs, outputs) {
     const input = inputs[0];
-    if (!input || !input[0]) return true;
-
-    const inputChannel  = input[0];
-    const outputChannel = inputChannel; // pass-through se RNNoise não disponível
-
-    if (!this._enabled || !this._rnnoiseState || !this._module) {
-      // Sem processamento — pass-through direto
-      this.port.postMessage({ type: 'audio', data: outputChannel }, [outputChannel.buffer.slice(0).buffer]);
+    const output = outputs[0];
+    if (!input || !input[0] || !output || !output[0]) return true;
+    const inCh = input[0];
+    const outCh = output[0];
+    const n = outCh.length;
+    if (!this._enabled) {
+      outCh.set(inCh);
+      for (let c = 1; c < output.length; c++) {
+        if (output[c]) output[c].set(input[c] || inCh);
+      }
       return true;
     }
-
-    // Acumular amostras no buffer
-    let inputOffset = 0;
-    while (inputOffset < inputChannel.length) {
-      const toCopy = Math.min(
-        RNNOISE_FRAME_SIZE - this._bufferPos,
-        inputChannel.length - inputOffset
-      );
-      this._buffer.set(inputChannel.subarray(inputOffset, inputOffset + toCopy), this._bufferPos);
-      this._bufferPos += toCopy;
-      inputOffset     += toCopy;
-
-      if (this._bufferPos === RNNOISE_FRAME_SIZE) {
-        this._processFrame();
-        this._bufferPos = 0;
+    let sumSq = 0;
+    for (let i = 0; i < n; i++) {
+      const x = inCh[i];
+      const y = this._hpA * (this._hpY1 + x - this._hpX1);
+      this._hpX1 = x;
+      this._hpY1 = y;
+      const abs = y >= 0 ? y : -y;
+      sumSq += y * y;
+      if (this._gateOpen < 0.25) {
+        this._noiseFloor = this._noiseFloor * 0.995 + abs * 0.005;
       }
+      const openT = Math.max(this._openThresh, this._noiseFloor * 3.2);
+      const closeT = Math.max(this._closeThresh, this._noiseFloor * 1.8);
+      const level = Math.sqrt(sumSq / (i + 1));
+      const target = level > (this._gateOpen > 0.5 ? closeT : openT) ? 1 : 0;
+      const coeff = target > this._gateOpen ? this._attack : this._release;
+      this._gateOpen += (target - this._gateOpen) * coeff;
+      let g = this._gateOpen;
+      if (g < 0.15) g *= g / 0.15;
+      let s = y * g * 1.12;
+      if (s > 0.95) s = 0.95 + (s - 0.95) * 0.15;
+      if (s < -0.95) s = -0.95 + (s + 0.95) * 0.15;
+      outCh[i] = s;
     }
-
+    for (let c = 1; c < output.length; c++) {
+      if (output[c]) output[c].set(outCh);
+    }
     return true;
   }
-
-  _processFrame() {
-    // RNNoise espera amostras em [-32768, 32767] (16-bit PCM range)
-    for (let i = 0; i < RNNOISE_FRAME_SIZE; i++) {
-      this._heapInput.arr[i] = this._buffer[i] * 32768;
-    }
-
-    this._module._rnnoise_process_frame(
-      this._rnnoiseState,
-      this._heapOutput.ptr,
-      this._heapInput.ptr
-    );
-
-    // Converter de volta para [-1, 1]
-    const out = new Float32Array(RNNOISE_FRAME_SIZE);
-    for (let i = 0; i < RNNOISE_FRAME_SIZE; i++) {
-      out[i] = this._heapOutput.arr[i] / 32768;
-    }
-
-    this.port.postMessage({ type: 'audio', data: out }, [out.buffer]);
-  }
 }
-
-registerProcessor('rnnoise-processor', RNNoiseProcessor);
+registerProcessor('noise-suppression-processor', NoiseSuppressionProcessor);
