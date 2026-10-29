@@ -1946,7 +1946,10 @@ function renderRoomsList(roomsArr) {
 
 function fetchRooms() {
   socket.emit('list-rooms', (res) => {
-    renderRoomsList(res.rooms);
+    const rooms = (res && res.rooms) || [];
+    renderRoomsList(rooms);
+    const stat = document.getElementById('arena-stat-rooms');
+    if (stat) stat.textContent = String(rooms.length);
   });
 }
 
@@ -2869,4 +2872,16 @@ document.querySelectorAll('.quality-option').forEach(btn => {
   }
   showProfileView();
   connectSocket().then(() => fetchRooms());
+
+  // Navegação lateral do lobby arena
+  document.querySelectorAll('.arena-nav-item[data-scroll]').forEach(btn => {
+    btn.addEventListener('click', () => {
+      document.querySelectorAll('.arena-nav-item[data-scroll]').forEach(b => b.classList.remove('active'));
+      btn.classList.add('active');
+      const id = btn.getAttribute('data-scroll');
+      const el = document.getElementById(id);
+      if (el) el.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    });
+  });
+
 })();
