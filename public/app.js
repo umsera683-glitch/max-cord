@@ -177,21 +177,35 @@ function supportsScreenShare() {
 
 function saveName(n) { try { localStorage.setItem('sh_username', n); } catch (_) {} }
 function loadName()  { try { return localStorage.getItem('sh_username') || ''; } catch (_) { return ''; } }
+// Foto em memória (fallback quando localStorage estoura quota)
+let _photoMemory = '';
+
 function savePhoto(url) {
+  const u = url || '';
+  _photoMemory = u;
   try {
-    localStorage.setItem('sh_photo', url || '');
+    localStorage.setItem('sh_photo', u);
   } catch (err) {
-    // Quota: tenta salvar só se for URL curta
+    // Quota cheia: mantém só em memória nesta sessão
     try {
-      if (url && url.length < 2000) localStorage.setItem('sh_photo', url);
-      else {
-        localStorage.removeItem('sh_photo');
-        showToast('Foto grande demais para salvar no navegador. Use uma URL de GIF/imagem.', 'error');
+      if (u && u.length < 4000 && /^https?:\/\//i.test(u)) {
+        localStorage.setItem('sh_photo', u);
+      } else {
+        // não remove se já tinha URL curta; só avisa se for data grande
+        if (u.startsWith('data:') && u.length > 50000) {
+          showToast('Foto grande: funciona nesta sessão. Para guardar, use link do Tenor/Giphy.', 'info');
+        }
       }
     } catch (_) {}
   }
 }
-function loadPhoto()    { try { return localStorage.getItem('sh_photo') || ''; } catch (_) { return ''; } }
+function loadPhoto() {
+  try {
+    const stored = localStorage.getItem('sh_photo') || '';
+    if (stored) return stored;
+  } catch (_) {}
+  return _photoMemory || '';
+}
 
 // ==================== SOCKET ====================
 
@@ -2059,9 +2073,20 @@ function applyAvatarTo(el, name, photoUrl) {
     const img = document.createElement('img');
     img.alt = safeInit;
     img.decoding = 'async';
+    img.loading = 'eager';
     img.referrerPolicy = 'no-referrer';
+    // ajuda a carregar GIFs/imagens de CDNs (Giphy/Tenor)
+    if (/^https?:\/\//i.test(url)) {
+      try { img.crossOrigin = 'anonymous'; } catch (_) {}
+    }
     img.style.cssText = 'width:100%;height:100%;object-fit:cover;border-radius:inherit;display:block;';
     img.onerror = () => {
+      // se crossOrigin falhar, tenta de novo sem CORS
+      if (img.crossOrigin) {
+        img.crossOrigin = null;
+        img.src = url;
+        return;
+      }
       while (el.firstChild) el.removeChild(el.firstChild);
       el.classList.remove('has-photo');
       el.textContent = safeInit;
@@ -2150,31 +2175,34 @@ function saveProfile() {
 
 function handlePhotoUpload(file) {
   if (!file) return;
-  if (file.size > 4 * 1024 * 1024) {
-    showToast('Arquivo muito grande. Use até 4MB ou cole uma URL de GIF.', 'error');
+  // Limite generoso: 8MB. Acima disso, oriente a usar URL.
+  if (file.size > 8 * 1024 * 1024) {
+    showToast('Arquivo acima de 8MB. Cole um link do Tenor/Giphy ou use uma imagem menor.', 'error');
     return;
   }
-  // GIF: manter animação (data URL direto se caber)
-  if (/image\/gif/i.test(file.type) || /\.gif$/i.test(file.name)) {
-    if (file.size > 900 * 1024) {
-      showToast('GIF grande demais. Use URL do Tenor/Giphy ou arquivo até ~900KB.', 'error');
-      return;
-    }
+  const isGif = /image\/gif/i.test(file.type) || /\.gif$/i.test(file.name);
+  // GIF: mantém animação. Até ~1.5MB cabe bem no socket; acima disso ainda funciona na sessão.
+  if (isGif) {
     const reader = new FileReader();
     reader.onload = (e) => {
+      const dataUrl = e.target.result;
       const photoEl = document.getElementById('profile-photo-url');
-      if (photoEl) photoEl.value = e.target.result;
+      if (photoEl) photoEl.value = dataUrl;
       updateAvatarPreview();
+      if (file.size > 1.5 * 1024 * 1024) {
+        showToast('GIF grande: ok nesta sessão. Para guardar permanentemente, use link Tenor/Giphy.', 'info');
+      }
     };
+    reader.onerror = () => showToast('Não foi possível ler o GIF', 'error');
     reader.readAsDataURL(file);
     return;
   }
-  // Imagem estática: comprimir para caber no socket
+  // Imagem estática: redimensiona e comprime (melhor qualidade, até 256px)
   const reader = new FileReader();
   reader.onload = (e) => {
     const img = new Image();
     img.onload = () => {
-      const max = 160;
+      const max = 256;
       let w = img.width, h = img.height;
       if (w > max || h > max) {
         if (w > h) { h = Math.round(h * max / w); w = max; }
@@ -2182,8 +2210,15 @@ function handlePhotoUpload(file) {
       }
       const c = document.createElement('canvas');
       c.width = w; c.height = h;
-      c.getContext('2d').drawImage(img, 0, 0, w, h);
-      const dataUrl = c.toDataURL('image/jpeg', 0.82);
+      const ctx = c.getContext('2d');
+      ctx.imageSmoothingEnabled = true;
+      ctx.imageSmoothingQuality = 'high';
+      ctx.drawImage(img, 0, 0, w, h);
+      // tenta webp; se não, jpeg de boa qualidade
+      let dataUrl = c.toDataURL('image/webp', 0.85);
+      if (!dataUrl.startsWith('data:image/webp')) {
+        dataUrl = c.toDataURL('image/jpeg', 0.88);
+      }
       const photoEl = document.getElementById('profile-photo-url');
       if (photoEl) photoEl.value = dataUrl;
       updateAvatarPreview();
@@ -2191,6 +2226,7 @@ function handlePhotoUpload(file) {
     img.onerror = () => showToast('Não foi possível ler a imagem', 'error');
     img.src = e.target.result;
   };
+  reader.onerror = () => showToast('Não foi possível ler o arquivo', 'error');
   reader.readAsDataURL(file);
 }
 
@@ -2896,6 +2932,70 @@ document.querySelectorAll('.quality-option').forEach(btn => {
   });
 });
 
+// ==================== PWA INSTALL (celular) ====================
+
+let deferredInstallPrompt = null;
+
+window.addEventListener('beforeinstallprompt', (e) => {
+  e.preventDefault();
+  deferredInstallPrompt = e;
+  const btn = document.getElementById('btn-install-mobile');
+  if (btn) {
+    btn.disabled = false;
+    btn.textContent = 'Instalar no celular';
+  }
+});
+
+window.addEventListener('appinstalled', () => {
+  deferredInstallPrompt = null;
+  const btn = document.getElementById('btn-install-mobile');
+  if (btn) {
+    btn.disabled = true;
+    btn.textContent = 'Já instalado ✓';
+  }
+  showToast('MaxCord instalado no celular!', 'success');
+});
+
+function setupMobileInstallButton() {
+  const btn = document.getElementById('btn-install-mobile');
+  const hint = document.getElementById('install-mobile-hint');
+  if (!btn) return;
+
+  // Já está em modo standalone?
+  const isStandalone = window.matchMedia('(display-mode: standalone)').matches
+    || window.navigator.standalone === true;
+  if (isStandalone) {
+    btn.disabled = true;
+    btn.textContent = 'Já instalado ✓';
+    if (hint) hint.textContent = 'Você já está usando o app instalado.';
+    return;
+  }
+
+  btn.addEventListener('click', async () => {
+    if (deferredInstallPrompt) {
+      deferredInstallPrompt.prompt();
+      try {
+        const choice = await deferredInstallPrompt.userChoice;
+        if (choice && choice.outcome === 'accepted') {
+          showToast('Instalando…', 'success');
+        }
+      } catch (_) {}
+      deferredInstallPrompt = null;
+      return;
+    }
+    // Fallback: instruções manuais
+    const isIOS = /iPad|iPhone|iPod/.test(navigator.userAgent) ||
+      (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
+    if (isIOS) {
+      showToast('No iPhone: toque em Compartilhar → “Adicionar à Tela de Início”.', 'info');
+      if (hint) hint.textContent = 'iPhone (Safari): Compartilhar → Adicionar à Tela de Início';
+    } else {
+      showToast('No Android: menu ⋮ do Chrome → “Instalar aplicativo” ou “Adicionar à tela inicial”.', 'info');
+      if (hint) hint.textContent = 'Android Chrome: menu ⋮ → Instalar app / Adicionar à tela inicial';
+    }
+  });
+}
+
 // ==================== INIT ====================
 
 (function init() {
@@ -2931,4 +3031,10 @@ document.querySelectorAll('.quality-option').forEach(btn => {
     });
   });
 
+  setupMobileInstallButton();
+
+  // Service worker (PWA)
+  if ('serviceWorker' in navigator) {
+    navigator.serviceWorker.register('/sw.js').catch(() => {});
+  }
 })();

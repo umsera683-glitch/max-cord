@@ -64,7 +64,7 @@ const io = new Server(server, {
     methods: ['GET', 'POST']
   },
   // SDP/ICE cabem com folga; fotos de perfil grandes são recusadas no cliente
-  maxHttpBufferSize: 1.5e6
+  maxHttpBufferSize: 2.5e6
 });
 
 // ==================== MIDDLEWARES DE SEGURANÇA ====================
@@ -129,9 +129,9 @@ function sanitizePhotoUrl(val) {
   if (typeof val !== 'string') return '';
   const s = val.trim();
   if (!s) return '';
-  // data:image (jpg/png/gif/webp) — até ~200KB em base64
+  // data:image (jpg/png/gif/webp) — até ~900KB em base64
   if (/^data:image\/(png|jpe?g|gif|webp);base64,/i.test(s)) {
-    return s.slice(0, 220000);
+    return s.slice(0, 1200000);
   }
   // URL http(s) — Tenor/Giphy podem ser longas
   if (/^https?:\/\//i.test(s)) {
