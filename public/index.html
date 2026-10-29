@@ -6,17 +6,17 @@
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="mobile-web-app-capable" content="yes">
   <meta name="description" content="MaxCord — Transmissão de tela e vídeo em tempo real via WebRTC">
-  <meta name="theme-color" content="#0d0d14">
+  <meta name="theme-color" content="#0a0e1a">
   <title>MaxCord</title>
   <link rel="icon" type="image/png" href="/logo.png">
   <link rel="apple-touch-icon" href="/logo.png">
+  <link rel="manifest" href="/manifest.webmanifest">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
   <meta property="og:image" content="/logo.png">
   <meta property="og:title" content="MaxCord">
   <meta property="og:description" content="Transmissão de tela e vídeo em tempo real">
   <script src="https://cdn.tailwindcss.com"></script>
   <script>
-    // Netlify (estático) → backend no Render; em qualquer outro host usa o próprio origin
-    // Assim qualquer usuário/navegador/dispositivo conecta no servidor certo
     window.SOCKET_URL = /netlify\.app$/i.test(location.hostname)
       ? 'https://max-cord.onrender.com'
       : location.origin;
@@ -26,72 +26,68 @@
 </head>
 <body>
 
-<!-- ===================== LOBBY ===================== -->
-<div id="lobby-view" class="lobby-root lobby-fullscreen">
+<!-- ===================== LOBBY (Arena limpa) ===================== -->
+<div id="lobby-view" class="lobby-root arena-layout">
 
-  <!-- Fundo com gradiente animado -->
-  <div class="lobby-bg" aria-hidden="true">
-    <div class="lobby-bg-orb orb-1"></div>
-    <div class="lobby-bg-orb orb-2"></div>
-    <div class="lobby-bg-orb orb-3"></div>
-  </div>
-
-  <div class="lobby-scroll">
-    <div class="lobby-inner">
-
-      <!-- ---- Hero ---- -->
-      <div class="lobby-hero">
-        <div class="lobby-logo">
-          <div class="logo-icon">
-            <img src="/logo.png" alt="MaxCord" style="width:56px;height:56px;border-radius:50%;display:block;object-fit:cover">
-          </div>
-          <span class="logo-name">MaxCord</span>
+  <aside class="arena-sidebar" aria-label="Menu">
+    <div class="arena-side-top">
+      <div class="arena-brand">
+        <img src="/logo.png" alt="" class="arena-brand-logo">
+        <span class="arena-brand-name">MaxCord</span>
+      </div>
+      <div class="arena-user">
+        <div id="profile-avatar-wrap" class="arena-user-avatar-wrap">
+          <div id="profile-avatar-display" class="arena-user-avatar">?</div>
         </div>
-        <p class="lobby-tagline">Transmita sua tela e vídeo em tempo real</p>
-        <div class="lobby-badges">
-          <span class="badge"><span class="badge-dot"></span>WebRTC Seguro</span>
-          <span class="badge">🔒 Salas com senha</span>
-          <span class="badge">📱 Mobile &amp; Desktop</span>
+        <div class="arena-user-meta">
+          <p id="profile-name-display" class="arena-user-name">—</p>
+          <button type="button" id="btn-edit-profile" class="arena-edit-link">Editar perfil</button>
         </div>
       </div>
+    </div>
 
-      <!-- ---- Perfil ---- -->
-      <section class="card" id="profile-card">
-        <div class="card-header">
-          <div class="card-header-left">
-            <div class="section-icon">👤</div>
-            <span class="section-title">Seu Perfil</span>
-          </div>
-          <button id="btn-edit-profile" class="btn-ghost-sm">✏️ Editar</button>
-        </div>
+    <nav class="arena-nav">
+      <button type="button" class="arena-nav-item" id="btn-theme-lobby">
+        <span class="ani">◐</span> Tema
+      </button>
+    </nav>
 
-        <!-- Modo visualização -->
-        <div id="profile-view" class="profile-view">
-          <div class="profile-avatar-wrap" id="profile-avatar-wrap">
-            <div id="profile-avatar-display" class="avatar avatar-xl">?</div>
-          </div>
-          <div class="profile-info">
-            <p id="profile-name-display" class="profile-name">—</p>
-            <p class="profile-hint">Apelido salvo · toque em Editar para alterar</p>
-          </div>
-        </div>
+    <div class="arena-side-bottom">
+      <div class="watermark-lobby arena-credit">
+        <span class="watermark-logo">MaxCord</span>
+        <span class="watermark-sep">·</span>
+        <span class="watermark-credit">por <strong>Exibido</strong></span>
+      </div>
+    </div>
+  </aside>
 
-        <!-- Modo edição -->
+  <div class="arena-main">
+    <div class="arena-scroll">
+
+      <!-- Perfil edição -->
+      <section class="card arena-card" id="profile-card">
+        <div id="profile-view" class="hidden"></div>
         <div id="profile-edit" class="hidden">
+          <div class="card-header">
+            <div class="card-header-left">
+              <div class="section-icon">👤</div>
+              <span class="section-title">Seu perfil</span>
+            </div>
+          </div>
           <div class="profile-edit-row">
             <div class="profile-edit-avatar-col">
               <div class="profile-avatar-wrap cursor-pointer" id="profile-edit-avatar-wrap" title="Trocar foto">
                 <div id="avatar-preview" class="avatar avatar-xl">?</div>
                 <div class="avatar-edit-overlay">📷</div>
               </div>
-              <span class="input-hint">Foto / GIF</span>
+              <span class="input-hint">Foto ou GIF</span>
             </div>
             <div class="profile-edit-fields">
               <input type="text" id="global-username" placeholder="Seu apelido" maxlength="20"
                 class="input-field" autocomplete="nickname">
-              <input type="url" id="profile-photo-url" placeholder="URL de imagem ou GIF"
+              <input type="url" id="profile-photo-url" placeholder="URL da imagem ou GIF (Tenor/Giphy)"
                 class="input-field input-sm">
-              <p class="input-hint">Cole um link de imagem ou GIF do Tenor/Giphy</p>
+              <p class="input-hint">Cole um link https://… ou use Upload</p>
             </div>
           </div>
           <input type="file" id="profile-photo-file" accept="image/*,.gif" class="hidden">
@@ -102,15 +98,8 @@
         </div>
       </section>
 
-      <div class="lobby-tabs">
-        <button type="button" class="lobby-tab active" id="tab-stream">📡 Transmissão</button>
-        <button type="button" class="lobby-tab" id="tab-community">🏠 Comunidade</button>
-      </div>
-      <!-- ---- Criar + Entrar ---- -->
-      <div class="action-grid">
-
-        <!-- Criar Sala -->
-        <section class="card card-create">
+      <div class="action-grid arena-action-grid">
+        <section class="card card-create arena-card" id="section-create">
           <div class="card-header">
             <div class="card-header-left">
               <div class="section-icon section-icon-purple">＋</div>
@@ -122,18 +111,14 @@
             <div class="input-row">
               <input type="text" id="create-room-id" placeholder="ID (ou gerar)" maxlength="10"
                 class="input-field flex-1 uppercase">
-              <button id="generate-room-id" class="btn-generate">🎲</button>
+              <button id="generate-room-id" class="btn-generate" type="button">🎲</button>
             </div>
             <input type="password" id="create-password" placeholder="Senha (opcional)" class="input-field">
-            <button id="btn-create-room" class="btn-primary w-full">
-              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg>
-              Criar Sala
-            </button>
+            <button id="btn-create-room" class="btn-primary w-full" type="button">＋ Criar Sala</button>
           </div>
         </section>
 
-        <!-- Entrar em Sala -->
-        <section class="card card-join">
+        <section class="card card-join arena-card" id="section-join">
           <div class="card-header">
             <div class="card-header-left">
               <div class="section-icon section-icon-blue">→</div>
@@ -146,57 +131,39 @@
             <div>
               <input type="password" id="join-password" placeholder="Senha (se houver)" class="input-field">
               <div class="flex justify-end mt-1">
-                <button id="btn-forgot-password" type="button" class="btn-link hidden">
-                  Esqueci a senha
-                </button>
+                <button id="btn-forgot-password" type="button" class="btn-link hidden">Esqueci a senha</button>
               </div>
             </div>
-            <button id="btn-join-room" class="btn-secondary-solid w-full">
-              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><path d="M15 3h4a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2h-4"/><polyline points="10 17 15 12 10 7"/><line x1="15" y1="12" x2="3" y2="12"/></svg>
-              Entrar
-            </button>
+            <button id="btn-join-room" class="btn-secondary-solid w-full" type="button">→ Entrar</button>
           </div>
         </section>
       </div>
 
-      <!-- ---- Salas Disponíveis ---- -->
-      <section class="card">
+      <section class="card arena-card" id="section-rooms">
         <div class="card-header">
           <div class="card-header-left">
             <div class="section-icon section-icon-green">🌐</div>
-            <span class="section-title">Salas Disponíveis</span>
+            <span class="section-title">Salas disponíveis</span>
           </div>
-          <button id="btn-refresh-rooms" class="btn-ghost-sm">↻ Atualizar</button>
+          <button id="btn-refresh-rooms" class="btn-ghost-sm" type="button">↻ Atualizar</button>
         </div>
-        <div id="rooms-list" class="rooms-list">
+        <div id="rooms-list" class="rooms-list arena-rooms-grid">
           <p class="rooms-empty">Nenhuma sala ativa no momento.</p>
         </div>
       </section>
-
-      <!-- Rodapé -->
-      <footer class="lobby-footer">
-        <button id="btn-theme-lobby" class="btn-ghost-sm" style="font-size:13px;margin-bottom:12px">
-          🎨 Escolher Tema
-        </button>
-        <div class="watermark-lobby">
-          <span class="watermark-logo">MaxCord</span>
-          <span class="watermark-sep">·</span>
-          <span class="watermark-credit">Criado por <strong>Exibido</strong></span>
-        </div>
-      </footer>
 
     </div>
   </div>
 </div>
 
 <!-- ===================== ROOM VIEW ===================== -->
-<div id="room-view" class="room-view room-fullscreen hidden">
+<div id="room-view" class="room-view hidden">
 
   <!-- Header -->
   <header class="room-header">
     <div class="room-header-left">
       <div class="room-logo">
-        <img src="/logo.png" alt="MaxCord" style="width:34px;height:34px;border-radius:50%;display:block;object-fit:cover">
+        <img src="/logo.png" alt="MaxCord" style="width:34px;height:34px;border-radius:50%;display:block;object-fit:cover;box-shadow:0 0 10px rgba(168,85,247,0.5)">
       </div>
       <div class="room-title-wrap">
         <span class="room-hash">#</span>
@@ -284,12 +251,7 @@
         <svg class="tb-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/><line x1="12" y1="19" x2="12" y2="23"/><line x1="8" y1="23" x2="16" y2="23"/></svg>
         <span class="btn-label">Mic</span>
       </button>
-      <!-- Supressão de ruído RNNoise -->
-      <button id="btn-noise" class="toolbar-btn active-noise" title="Supressão de ruídos — clique para ativar/desativar">
-        <svg class="tb-icon" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/><line x1="12" y1="19" x2="12" y2="23"/><line x1="8" y1="23" x2="16" y2="23"/></svg>
-        <span class="btn-label">Supressão de ruídos</span>
-      </button>
-      <!-- Qualidade da transmissão (só aparece quando a transmissão está ativa) -->
+<!-- Qualidade da transmissão -->
       <div class="quality-select-wrap hidden" id="quality-select-wrap" title="Qualidade da transmissão">
         <svg class="tb-icon quality-select-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="3" width="20" height="14" rx="2"/><polyline points="8 21 12 17 16 21"/></svg>
         <select id="quality-select" class="quality-select">
@@ -320,7 +282,6 @@
 </div>
 
 <!-- Toast -->
-<div id="community-view" class="community-view hidden"></div>
 <div id="toast-container" class="toast-container"></div>
 
 <!-- Modal Esqueci a senha -->
@@ -495,6 +456,12 @@
 </div>
 
 <script src="/app.js"></script>
-  <script src="/community.js"></script>
+<script>
+  if ('serviceWorker' in navigator) {
+    window.addEventListener('load', () => {
+      navigator.serviceWorker.register('/sw.js').catch(() => {});
+    });
+  }
+</script>
 </body>
 </html>
