@@ -1,0 +1,30 @@
+{
+  "name": "MaxCord",
+  "short_name": "MaxCord",
+  "description": "Crie uma sala e envie o link. Transmissão direta entre os participantes, sem instalar nada.",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "orientation": "any",
+  "background_color": "#070b16",
+  "theme_color": "#0a0e1a",
+  "lang": "pt-BR",
+  "icons": [
+    {
+      "src": "/logo.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any maskable"
+    },
+    {
+      "src": "/logo.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any maskable"
+    }
+  ],
+  "categories": [
+    "social",
+    "entertainment"
+  ]
+}

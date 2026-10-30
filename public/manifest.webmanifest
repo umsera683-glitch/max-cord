@@ -1,7 +1,7 @@
 {
   "name": "MaxCord",
   "short_name": "MaxCord",
-  "description": "Transmissão de tela e vídeo em tempo real",
+  "description": "Crie uma sala e envie o link. Transmissão direta entre os participantes, sem instalar nada.",
   "start_url": "/",
   "scope": "/",
   "display": "standalone",
@@ -23,5 +23,8 @@
       "purpose": "any maskable"
     }
   ],
-  "categories": ["social", "entertainment"]
+  "categories": [
+    "social",
+    "entertainment"
+  ]
 }
