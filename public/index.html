@@ -66,7 +66,15 @@
           <div id="profile-avatar-display" class="arena-user-avatar">?</div>
         </div>
         <div class="arena-user-meta">
-          <p id="profile-name-display" class="arena-user-name">—</p>
+          <div class="arena-user-name-row">
+            <p id="profile-name-display" class="arena-user-name">—</p>
+            <span id="profile-terms-badge" class="mc-terms-badge hidden" title="Aceitou a Política de Privacidade e os Termos de Uso" aria-label="Verificado — termos aceitos">
+              <svg class="mc-terms-badge-icon" viewBox="0 0 24 24" width="14" height="14" aria-hidden="true">
+                <path fill="currentColor" d="M12 2l2.4 2.1 3.2-.3 1.1 3 2.9 1.4-1.1 3 .9 3.1-2.9 1.3-1.2 3-3.2-.4L12 22l-2.4-2.2-3.2.4-1.1-3-2.9-1.3.9-3.1L2.3 8.2l2.9-1.4 1.1-3 3.2.3L12 2zm-1.1 13.3l5.2-5.2-1.4-1.4-3.8 3.8-1.7-1.7-1.4 1.4 3.1 3.1z"/>
+              </svg>
+              <span class="mc-terms-badge-label">Verificado</span>
+            </span>
+          </div>
           <button type="button" id="btn-edit-profile" class="arena-edit-link">Editar perfil</button>
         </div>
       </div>
@@ -125,7 +133,7 @@
             <span class="terms-check-text">
               Para criar o perfil, leia e aceite a
               <button type="button" id="link-open-privacy" class="terms-link">Política de Privacidade e Termos de Uso</button>
-              <span class="terms-check-hint"> (role até o final para aceitar)</span>
+              <span class="terms-check-hint"> (leia com atenção nossos termos de uso e política de privacidade até o fim)</span>
             </span>
           </div>
           <div class="btn-row mt-3">
@@ -559,7 +567,8 @@
       <p>Dúvidas sobre o funcionamento do MaxCord ou sobre estes termos: utilize o canal oficial de suporte indicado no site ou pelo responsável pela plataforma.</p>
     </div>
     <div class="privacy-modal-actions">
-      <p id="privacy-scroll-hint" class="privacy-scroll-hint">Role até o final do texto para habilitar o aceite</p>
+      <p id="privacy-scroll-hint" class="privacy-scroll-hint">Leia com atenção nossos termos de uso e política de privacidade até o fim</p>
+      <p id="privacy-already-accepted" class="privacy-already-accepted hidden" role="status"></p>
       <button type="button" id="btn-privacy-accept" class="btn-primary w-full is-disabled" disabled>✓ Entendi e aceito</button>
     </div>
   </div>

@@ -220,12 +220,73 @@ function loadName() {
 }
 
 const TERMS_KEY = 'mc_terms_accepted_v1';
+const TERMS_META_KEY = 'mc_terms_meta_v1';
+
+function loadTermsMeta() {
+  try {
+    const raw = localStorage.getItem(TERMS_META_KEY);
+    if (!raw) return null;
+    const data = JSON.parse(raw);
+    if (!data || typeof data !== 'object') return null;
+    return data;
+  } catch (_) { return null; }
+}
+
 function loadTermsAccepted() {
-  try { return localStorage.getItem(TERMS_KEY) === '1'; } catch (_) { return false; }
+  try {
+    if (localStorage.getItem(TERMS_KEY) === '1') return true;
+    const meta = loadTermsMeta();
+    return !!(meta && meta.accepted);
+  } catch (_) { return false; }
 }
-function saveTermsAccepted() {
-  try { localStorage.setItem(TERMS_KEY, '1'); } catch (_) {}
+
+/** Salva aceite ligado ao perfil (apelido) + data. */
+function saveTermsAccepted(profileName) {
+  const name = sanitizeUserText(profileName || loadName() || '', 20);
+  const meta = {
+    accepted: true,
+    name: name || '',
+    at: new Date().toISOString(),
+    version: 'v1'
+  };
+  try {
+    localStorage.setItem(TERMS_KEY, '1');
+    localStorage.setItem(TERMS_META_KEY, JSON.stringify(meta));
+  } catch (_) {}
+  return meta;
 }
+
+function formatTermsDate(iso) {
+  if (!iso) return '';
+  try {
+    return new Date(iso).toLocaleString('pt-BR', {
+      day: '2-digit', month: '2-digit', year: 'numeric',
+      hour: '2-digit', minute: '2-digit'
+    });
+  } catch (_) { return ''; }
+}
+
+/** Emblema MaxCord — marca de quem aceitou os Termos / Privacidade */
+function createTermsBadgeEl(compact) {
+  const el = document.createElement('span');
+  el.className = 'mc-terms-badge' + (compact ? ' mc-terms-badge--compact' : '');
+  el.title = 'Aceitou a Política de Privacidade e os Termos de Uso';
+  el.setAttribute('aria-label', 'Verificado — termos aceitos');
+  el.innerHTML = `
+    <svg class="mc-terms-badge-icon" viewBox="0 0 24 24" width="14" height="14" aria-hidden="true">
+      <path fill="currentColor" d="M12 2l2.4 2.1 3.2-.3 1.1 3 2.9 1.4-1.1 3 .9 3.1-2.9 1.3-1.2 3-3.2-.4L12 22l-2.4-2.2-3.2.4-1.1-3-2.9-1.3.9-3.1L2.3 8.2l2.9-1.4 1.1-3 3.2.3L12 2zm-1.1 13.3l5.2-5.2-1.4-1.4-3.8 3.8-1.7-1.7-1.4 1.4 3.1 3.1z"/>
+    </svg>
+    <span class="mc-terms-badge-label">Verificado</span>`;
+  return el;
+}
+
+function updateProfileTermsBadge() {
+  const badge = document.getElementById('profile-terms-badge');
+  if (!badge) return;
+  if (loadTermsAccepted()) badge.classList.remove('hidden');
+  else badge.classList.add('hidden');
+}
+
 // Foto em memória (fallback quando localStorage estoura quota)
 let _photoMemory = '';
 
@@ -305,7 +366,8 @@ function setupSocketListeners() {
     participants.set(data.id, {
       name: data.name, isOwner: data.isOwner,
       isBroadcasting: false, broadcastType: null, hasMic: false, micMuted: true,
-      photoUrl: data.photoUrl || ''
+      photoUrl: data.photoUrl || '',
+      termsAccepted: !!data.termsAccepted
     });
     updateParticipantCount();
     renderParticipantsList();
@@ -1764,7 +1826,10 @@ async function createRoom() {
   myName = name; saveName(name);
   lastJoinPassword = password || '';
 
-  socket.emit('create-room', { roomId, roomName: rName, password, userName: name, photoUrl: loadPhoto() }, (res) => {
+  socket.emit('create-room', {
+    roomId, roomName: rName, password, userName: name,
+    photoUrl: loadPhoto(), termsAccepted: loadTermsAccepted()
+  }, (res) => {
     if (res.success) { isOwner = true; enterRoom(res.roomId, rName, true); }
     else showToast(res.message, 'error');
   });
@@ -1780,7 +1845,10 @@ async function joinRoom(roomId, password) {
   myName = name; saveName(name);
   lastJoinPassword = password || '';
 
-  socket.emit('join-room', { roomId, password, userName: name, photoUrl: loadPhoto() }, (res) => {
+  socket.emit('join-room', {
+    roomId, password, userName: name,
+    photoUrl: loadPhoto(), termsAccepted: loadTermsAccepted()
+  }, (res) => {
     if (res.success) {
       isOwner = res.isOwner;
       participants.clear();
@@ -1788,7 +1856,8 @@ async function joinRoom(roomId, password) {
         name: p.name, isOwner: p.isOwner,
         isBroadcasting: p.isBroadcasting, broadcastType: p.broadcastType,
         hasMic: p.hasMic, micMuted: p.micMuted,
-        photoUrl: p.photoUrl || ''
+        photoUrl: p.photoUrl || '',
+        termsAccepted: !!p.termsAccepted
       }));
       enterRoom(res.roomId, res.roomName, res.isOwner);
     } else {
@@ -1844,7 +1913,8 @@ function rejoinAfterReconnect() {
     roomId: currentRoomId,
     password: lastJoinPassword,
     userName: myName,
-    photoUrl: loadPhoto()
+    photoUrl: loadPhoto(),
+    termsAccepted: loadTermsAccepted()
   }, (res) => {
     if (!res || !res.success) {
       showToast('Não foi possível voltar à sala', 'error');
@@ -1857,7 +1927,8 @@ function rejoinAfterReconnect() {
       name: p.name, isOwner: p.isOwner,
       isBroadcasting: p.isBroadcasting, broadcastType: p.broadcastType,
       hasMic: p.hasMic, micMuted: p.micMuted,
-      photoUrl: p.photoUrl || ''
+      photoUrl: p.photoUrl || '',
+      termsAccepted: !!p.termsAccepted
     }));
     updateParticipantCount();
     renderParticipantsList();
@@ -1953,8 +2024,7 @@ function renderParticipantsList() {
   const list = document.getElementById('participants-list');
   list.innerHTML = '';
 
-  const renderItem = (id, name, owner, broadcasting, broadType, hasMic, micMuted, isMe, photoUrl) => {
-    const col = nameColor(name);
+  const renderItem = (id, name, owner, broadcasting, broadType, hasMic, micMuted, isMe, photoUrl, termsOk) => {
     const micIcon = hasMic ? (micMuted ? '🔇' : '🎙️') : '';
     const vidIcon = broadcasting ? (broadType === 'screen' ? '🖥️' : '📹') : '';
     const div = document.createElement('div');
@@ -1964,6 +2034,8 @@ function renderParticipantsList() {
     av.className = 'avatar avatar-sm';
     applyAvatarTo(av, name, photoUrl || '');
 
+    const nameWrap = document.createElement('div');
+    nameWrap.className = 'p-name-wrap';
     const nameSpan = document.createElement('span');
     nameSpan.className = 'p-name';
     nameSpan.textContent = name + (isMe ? ' ' : '');
@@ -1973,24 +2045,27 @@ function renderParticipantsList() {
       you.textContent = '(você)';
       nameSpan.appendChild(you);
     }
+    nameWrap.appendChild(nameSpan);
+    if (termsOk) nameWrap.appendChild(createTermsBadgeEl(true));
+
     const badges = document.createElement('div');
     badges.className = 'p-badges';
     if (owner) { const s = document.createElement('span'); s.className = 'p-badge'; s.textContent = '👑'; badges.appendChild(s); }
     if (vidIcon) { const s = document.createElement('span'); s.className = 'p-badge'; s.textContent = vidIcon; badges.appendChild(s); }
     if (micIcon) { const s = document.createElement('span'); s.className = 'p-badge'; s.textContent = micIcon; badges.appendChild(s); }
     div.appendChild(av);
-    div.appendChild(nameSpan);
+    div.appendChild(nameWrap);
     div.appendChild(badges);
     list.appendChild(div);
   };
 
   const myBroad = isCameraOn || isScreenSharing;
   const myType  = isScreenSharing ? 'screen' : (isCameraOn ? 'camera' : null);
-  renderItem(myId, myName, isOwner, myBroad, myType, !!micStream, !isMicOn, true, loadPhoto());
+  renderItem(myId, myName, isOwner, myBroad, myType, !!micStream, !isMicOn, true, loadPhoto(), loadTermsAccepted());
 
   for (const [pid, p] of participants) {
     if (pid === myId) continue;
-    renderItem(pid, p.name, p.isOwner, p.isBroadcasting, p.broadcastType, p.hasMic, p.micMuted, false, p.photoUrl || '');
+    renderItem(pid, p.name, p.isOwner, p.isBroadcasting, p.broadcastType, p.hasMic, p.micMuted, false, p.photoUrl || '', !!p.termsAccepted);
   }
 }
 
@@ -2228,6 +2303,7 @@ function showProfileView() {
 
   if (nameEl) nameEl.textContent = name || '—';
   if (dispAv) applyAvatarTo(dispAv, name || '?', photo);
+  updateProfileTermsBadge();
 
   if (!viewEl || !editEl) return;
 
@@ -2258,6 +2334,7 @@ function updateTermsUI() {
     // Só pode marcar via modal após ler tudo — não pelo clique direto
     termsEl.disabled = true;
   }
+  updateProfileTermsBadge();
 }
 
 function enterEditMode() {
@@ -2302,15 +2379,25 @@ function saveProfile() {
   if (photoEl) photoEl.value = photo;
   saveName(name);
   savePhoto(photo);
+  // Garante que o aceite fica vinculado ao apelido do perfil
+  saveTermsAccepted(name);
   updateTermsUI();
   showProfileView();
   showToast('Perfil salvo!', 'success');
 }
 
 function setPrivacyAcceptEnabled(enabled) {
+  // Se já aceitou, nunca reexibe o botão de confirmar
+  if (loadTermsAccepted()) {
+    applyPrivacyAlreadyAcceptedUI();
+    return;
+  }
   const btn = document.getElementById('btn-privacy-accept');
   const hint = document.getElementById('privacy-scroll-hint');
+  const done = document.getElementById('privacy-already-accepted');
+  if (done) done.classList.add('hidden');
   if (btn) {
+    btn.classList.remove('hidden');
     btn.disabled = !enabled;
     btn.classList.toggle('is-disabled', !enabled);
   }
@@ -2320,7 +2407,34 @@ function setPrivacyAcceptEnabled(enabled) {
   }
 }
 
+function applyPrivacyAlreadyAcceptedUI() {
+  const btn = document.getElementById('btn-privacy-accept');
+  const hint = document.getElementById('privacy-scroll-hint');
+  const done = document.getElementById('privacy-already-accepted');
+  if (btn) {
+    btn.classList.add('hidden');
+    btn.disabled = true;
+    btn.classList.add('is-disabled');
+  }
+  if (hint) hint.classList.add('hidden');
+  if (done) {
+    const meta = loadTermsMeta();
+    const when = formatTermsDate(meta && meta.at);
+    const who = (meta && meta.name) || loadName() || '';
+    let msg = 'Você já aceitou a Política de Privacidade e os Termos de Uso.';
+    if (who && when) msg = `Perfil “${who}” já aceitou os termos em ${when}.`;
+    else if (when) msg = `Você já aceitou os termos em ${when}.`;
+    else if (who) msg = `Perfil “${who}” já aceitou os termos.`;
+    done.textContent = msg;
+    done.classList.remove('hidden');
+  }
+}
+
 function onPrivacyScroll() {
+  if (loadTermsAccepted()) {
+    applyPrivacyAlreadyAcceptedUI();
+    return;
+  }
   const content = document.getElementById('privacy-content');
   if (!content) return;
   const atBottom = content.scrollTop + content.clientHeight >= content.scrollHeight - 12;
@@ -2332,14 +2446,19 @@ function openPrivacyModal() {
   if (!modal) return;
   modal.classList.remove('hidden');
   const content = document.getElementById('privacy-content');
+  if (content) content.scrollTop = 0;
+
+  // Já aceitou: só leitura — sem botão de confirmar
+  if (loadTermsAccepted()) {
+    applyPrivacyAlreadyAcceptedUI();
+    return;
+  }
+
   if (content) {
-    content.scrollTop = 0;
-    // Se o texto couber sem scroll, libera na hora
     requestAnimationFrame(() => {
       const needsScroll = content.scrollHeight > content.clientHeight + 8;
       setPrivacyAcceptEnabled(!needsScroll);
-      if (!needsScroll) return;
-      setPrivacyAcceptEnabled(false);
+      if (needsScroll) setPrivacyAcceptEnabled(false);
     });
   } else {
     setPrivacyAcceptEnabled(false);
@@ -2352,19 +2471,27 @@ function closePrivacyModal() {
 }
 
 function acceptPrivacyFromModal() {
+  if (loadTermsAccepted()) {
+    applyPrivacyAlreadyAcceptedUI();
+    closePrivacyModal();
+    return;
+  }
   const content = document.getElementById('privacy-content');
   if (content) {
     const atBottom = content.scrollTop + content.clientHeight >= content.scrollHeight - 12;
     const needsScroll = content.scrollHeight > content.clientHeight + 8;
     if (needsScroll && !atBottom) {
-      showToast('Role até o final do texto para aceitar', 'error');
+      showToast('Leia com atenção nossos termos de uso e política de privacidade até o fim', 'error');
       return;
     }
   }
-  saveTermsAccepted();
+  const nameEl = document.getElementById('global-username');
+  const profileName = sanitizeUserText((nameEl && nameEl.value) || loadName() || '', 20);
+  saveTermsAccepted(profileName);
   updateTermsUI();
+  applyPrivacyAlreadyAcceptedUI();
   closePrivacyModal();
-  showToast('Termos aceitos', 'success');
+  showToast('Termos aceitos e salvos no seu perfil', 'success');
 }
 
 function handlePhotoUpload(file) {
@@ -3258,3 +3385,4 @@ function setupMobileInstallButton() {
     navigator.serviceWorker.register('/sw.js').catch(() => {});
   }
 })();
+cat: write error: Operation not permitted
