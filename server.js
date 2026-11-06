@@ -74,7 +74,8 @@ app.use(helmet({
   contentSecurityPolicy: {
     directives: {
       defaultSrc:     ["'self'"],
-      scriptSrc:      ["'self'", "'unsafe-inline'", 'https://cdn.tailwindcss.com', 'https://cdn.socket.io', 'https://max-cord.onrender.com'],
+      baseUri:        ["'self'"],
+      scriptSrc:      ["'self'", "'unsafe-inline'", 'https://cdn.tailwindcss.com', 'https://cdn.socket.io'],
       styleSrc:       ["'self'", "'unsafe-inline'", 'https://cdn.tailwindcss.com'],
       connectSrc:     ["'self'", 'https://max-cord.onrender.com', 'wss://max-cord.onrender.com',
                        'https://cdn.socket.io', 'wss://cdn.socket.io',
@@ -83,8 +84,11 @@ app.use(helmet({
                        'https://stun.cloudflare.com'],
       mediaSrc:       ["'self'", 'blob:', 'mediastream:'],
       imgSrc:         ["'self'", 'data:', 'blob:', 'https:'],
+      workerSrc:      ["'self'", 'blob:'],
       frameSrc:       ["'none'"],
       objectSrc:      ["'none'"],
+      frameAncestors: ["'none'"],
+      formAction:     ["'self'"],
       upgradeInsecureRequests: []
     }
   },
@@ -93,8 +97,18 @@ app.use(helmet({
   // Esconde que usa Express
   hidePoweredBy: true,
   // HSTS — força HTTPS por 1 ano
-  hsts: { maxAge: 31536000, includeSubDomains: true }
+  hsts: { maxAge: 31536000, includeSubDomains: true },
+  referrerPolicy: { policy: 'strict-origin-when-cross-origin' }
 }));
+
+// Permissions-Policy: só câmera/mic/tela no próprio origin
+app.use((req, res, next) => {
+  res.setHeader(
+    'Permissions-Policy',
+    'camera=(self), microphone=(self), display-capture=(self), geolocation=(), payment=(), usb=()'
+  );
+  next();
+});
 
 // CORS para rotas HTTP
 app.use(cors({

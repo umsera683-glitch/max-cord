@@ -7,6 +7,9 @@
   <meta name="mobile-web-app-capable" content="yes">
   <meta name="theme-color" content="#0a0e1a">
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <meta name="referrer" content="strict-origin-when-cross-origin">
+  <!-- CSP: reforço no HTML (útil em hospedagem estática). O servidor Express/Helmet também envia CSP. -->
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; base-uri 'self'; object-src 'none'; frame-ancestors 'none'; form-action 'self'; img-src 'self' data: blob: https:; media-src 'self' blob: mediastream:; font-src 'self' data:; style-src 'self' 'unsafe-inline' https://cdn.tailwindcss.com; script-src 'self' 'unsafe-inline' https://cdn.tailwindcss.com https://cdn.socket.io; connect-src 'self' https://max-cord.onrender.com wss://max-cord.onrender.com https://cdn.socket.io wss://cdn.socket.io https://stun.l.google.com https://stun1.l.google.com https://stun.cloudflare.com; worker-src 'self' blob:; upgrade-insecure-requests">
 
   <!-- SEO / preview de link (WhatsApp, Discord, Telegram, etc.) -->
   <title>MaxCord — compartilhe sua tela pelo navegador</title>
@@ -73,6 +76,9 @@
       <button type="button" class="arena-nav-item" id="btn-theme-lobby">
         <span class="ani">◐</span> Tema
       </button>
+      <button type="button" class="arena-nav-item" id="btn-privacy">
+        <span class="ani">🛡</span> Privacidade
+      </button>
     </nav>
 
     <div class="arena-side-bottom">
@@ -114,6 +120,14 @@
             </div>
           </div>
           <input type="file" id="profile-photo-file" accept="image/*,.gif" class="hidden">
+          <div class="terms-check-row" id="terms-check-row">
+            <input type="checkbox" id="accept-terms" class="terms-checkbox" disabled tabindex="-1" aria-hidden="true">
+            <span class="terms-check-text">
+              Para criar o perfil, leia e aceite a
+              <button type="button" id="link-open-privacy" class="terms-link">Política de Privacidade e Termos de Uso</button>
+              <span class="terms-check-hint"> (role até o final para aceitar)</span>
+            </span>
+          </div>
           <div class="btn-row mt-3">
             <button id="btn-upload-photo" class="btn-secondary flex-1">📁 Upload</button>
             <button id="btn-save-profile" class="btn-primary flex-1">💾 Salvar</button>
@@ -474,6 +488,79 @@
           <div class="quality-desc">Economiza dados · para conexões lentas</div>
         </div>
       </button>
+    </div>
+  </div>
+</div>
+
+<!-- ===================== MODAL PRIVACIDADE / TERMOS ===================== -->
+<div id="modal-privacy" class="modal-overlay hidden" role="dialog" aria-modal="true" aria-labelledby="privacy-modal-title">
+  <div class="modal-box modal-privacy-box">
+    <div class="modal-header">
+      <h2 class="modal-title" id="privacy-modal-title">🛡 Privacidade e Termos</h2>
+      <button type="button" id="btn-privacy-close" class="btn-icon-sm" aria-label="Fechar">✕</button>
+    </div>
+    <div class="privacy-content" id="privacy-content">
+      <p class="privacy-updated">Última atualização: 5 de novembro de 2026</p>
+      <p>Bem-vindo ao <strong>MaxCord</strong>. Esta Política de Privacidade e Termos de Uso explicam como a plataforma funciona, como os dados são tratados e as regras para um ambiente seguro e transparente.</p>
+
+      <h3>1. O que é o MaxCord</h3>
+      <p>O MaxCord é uma plataforma de transmissão ao vivo pelo navegador (compartilhamento de tela, câmera e microfone) com salas temporárias. A sinalização entre participantes usa conexão em tempo real; o fluxo de mídia ocorre preferencialmente de forma peer-to-peer (WebRTC).</p>
+
+      <h3>2. Segurança e integridade</h3>
+      <ul>
+        <li>O site não contém trojans, grabbers, vírus ou malware.</li>
+        <li>Não instalamos arquivos maliciosos nem executamos scripts ocultos para roubo de dados.</li>
+        <li>Não rastreamos informações de rede fora do necessário para o funcionamento da aplicação.</li>
+      </ul>
+
+      <h3>3. Cadastro e dados pessoais</h3>
+      <ul>
+        <li><strong>Sem conta tradicional:</strong> não exigimos e-mail, senha de conta, nome completo, CPF, telefone ou documentos.</li>
+        <li><strong>Perfil local:</strong> apelido e foto/avatar ficam armazenados apenas no seu navegador (localStorage), para identificação visual na sessão e nas salas.</li>
+        <li>Ao entrar em uma sala, o apelido (e eventual foto) pode ser compartilhado com os outros participantes daquela sala, para identificação na interface.</li>
+        <li>Não mantemos um banco de dados permanente de usuários.</li>
+      </ul>
+
+      <h3>4. Câmera, microfone e compartilhamento de tela</h3>
+      <ul>
+        <li>O acesso a câmera, microfone e tela é solicitado pelo navegador apenas para viabilizar a comunicação ao vivo.</li>
+        <li><strong>Sem gravação pelo MaxCord:</strong> a plataforma não grava nem armazena as transmissões em nossos servidores.</li>
+        <li>O áudio e o vídeo trafegam em tempo real entre os participantes (conexão direta quando possível). Em alguns casos de rede (NAT/firewall), servidores TURN públicos de terceiros podem retransmitir temporariamente o fluxo para estabelecer a conexão — sem armazenamento pelo MaxCord.</li>
+        <li>Você pode ativar, desativar ou revogar permissões a qualquer momento nas configurações do navegador.</li>
+      </ul>
+
+      <h3>5. Dados técnicos e salas</h3>
+      <ul>
+        <li>Para criar e listar salas, o servidor de sinalização mantém informações temporárias da sala (nome, ID, se há senha, quantidade de participantes e apelido do criador) enquanto a sala estiver ativa.</li>
+        <li>Salas vazias são removidas automaticamente após um período curto.</li>
+        <li>Senhas de sala, quando definidas, são tratadas de forma segura no servidor (hash) e não ficam expostas em texto puro.</li>
+      </ul>
+
+      <h3>6. Regras de conduta e responsabilidade</h3>
+      <p>Ao usar o MaxCord, você concorda em <strong>não</strong> transmitir:</p>
+      <ol>
+        <li>Conteúdos de cunho sexual, pornográfico ou impróprio;</li>
+        <li>Discurso de ódio, assédio, discriminação ou incentivo à violência;</li>
+        <li>Materiais protegidos por direitos autorais sem a devida permissão;</li>
+        <li>Informações privadas de terceiros sem autorização.</li>
+      </ol>
+      <p><strong>Aviso:</strong> você é o único responsável pelo conteúdo transmitido pelo seu microfone, câmera ou compartilhamento de tela. O MaxCord não modera o conteúdo das transmissões em tempo real.</p>
+
+      <h3>7. Restrição de idade</h3>
+      <p>O uso é destinado a maiores de 18 anos (ou à maioridade legal da sua região). Menores não devem utilizar a plataforma sem consentimento e acompanhamento dos pais ou responsáveis legais.</p>
+
+      <h3>8. Limitação de responsabilidade</h3>
+      <p>O serviço é oferecido “como está”. Não garantimos disponibilidade ininterrupta nem qualidade de conexão (depende da rede de cada participante e de serviços de terceiros como STUN/TURN). Não nos responsabilizamos por conteúdos gerados pelos usuários nem por danos decorrentes do uso inadequado da plataforma.</p>
+
+      <h3>9. Alterações</h3>
+      <p>Podemos atualizar esta política periodicamente. A data da última atualização aparece no topo. O uso continuado após mudanças relevantes indica ciência dos novos termos; a aceitação formal é solicitada na criação do perfil.</p>
+
+      <h3>10. Contato</h3>
+      <p>Dúvidas sobre o funcionamento do MaxCord ou sobre estes termos: utilize o canal oficial de suporte indicado no site ou pelo responsável pela plataforma.</p>
+    </div>
+    <div class="privacy-modal-actions">
+      <p id="privacy-scroll-hint" class="privacy-scroll-hint">Role até o final do texto para habilitar o aceite</p>
+      <button type="button" id="btn-privacy-accept" class="btn-primary w-full is-disabled" disabled>✓ Entendi e aceito</button>
     </div>
   </div>
 </div>

@@ -68,6 +68,8 @@ let compRAF = null;
 // TURN: retransmite o mídia quando conexão direta falha (NAT/firewall)
 // Open Relay Project — gratuito, sem cadastro
 
+// WebRTC: DTLS/SRTP é obrigatório nos browsers modernos para media tracks.
+// STUN/TURN só auxiliam NAT traversal; mídia permanece criptografada ponta a ponta quando P2P.
 const ICE_CONFIG = {
   iceServers: [
     { urls: 'stun:stun.l.google.com:19302' },
@@ -77,7 +79,8 @@ const ICE_CONFIG = {
       urls: [
         'turn:openrelay.metered.ca:80',
         'turn:openrelay.metered.ca:443',
-        'turn:openrelay.metered.ca:443?transport=tcp'
+        'turn:openrelay.metered.ca:443?transport=tcp',
+        'turns:openrelay.metered.ca:443'
       ],
       username: 'openrelayproject',
       credential: 'openrelayproject'
@@ -152,13 +155,47 @@ function playSound(type) {
   } catch (_) {}
 }
 
+function escapeHtml(str) {
+  return String(str == null ? '' : str)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+}
+
+/** Texto de usuário: remove controles, limita tamanho e bloqueia padrões perigosos. */
+function sanitizeUserText(val, maxLen) {
+  if (typeof val !== 'string') return '';
+  let s = val.replace(/[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F]/g, '').trim();
+  s = s.slice(0, maxLen || 100);
+  // Neutraliza tentativas óbvias de markup/handlers
+  s = s.replace(/[<>]/g, '').replace(/javascript:/gi, '').replace(/data:text\/html/gi, '');
+  return s;
+}
+
+function isSafePhotoUrl(url) {
+  if (typeof url !== 'string') return false;
+  const s = url.trim();
+  if (!s) return false;
+  if (/^data:image\/(png|jpe?g|gif|webp);base64,[A-Za-z0-9+/=]+$/i.test(s) && s.length <= 1200000) return true;
+  if (/^https:\/\//i.test(s) && s.length <= 4000 && !/[\s<>"']/g.test(s)) return true;
+  return false;
+}
+
 function showToast(msg, type) {
   type = type || 'info';
   const icons = { success: '✓', error: '✕', info: 'ℹ' };
   const el = document.createElement('div');
   el.className = `toast ${type}`;
-  el.innerHTML = `<span>${icons[type]}</span><span>${msg}</span>`;
-  document.getElementById('toast-container').appendChild(el);
+  const icon = document.createElement('span');
+  icon.textContent = icons[type] || icons.info;
+  const text = document.createElement('span');
+  text.textContent = String(msg == null ? '' : msg);
+  el.appendChild(icon);
+  el.appendChild(text);
+  const box = document.getElementById('toast-container');
+  if (box) box.appendChild(el);
   setTimeout(() => { el.classList.add('fade-out'); setTimeout(() => el.remove(), 300); }, 3200);
 }
 
@@ -175,20 +212,34 @@ function supportsScreenShare() {
   return !!(navigator.mediaDevices && navigator.mediaDevices.getDisplayMedia);
 }
 
-function saveName(n) { try { localStorage.setItem('sh_username', n); } catch (_) {} }
-function loadName()  { try { return localStorage.getItem('sh_username') || ''; } catch (_) { return ''; } }
+function saveName(n) {
+  try { localStorage.setItem('sh_username', sanitizeUserText(n, 20)); } catch (_) {}
+}
+function loadName() {
+  try { return sanitizeUserText(localStorage.getItem('sh_username') || '', 20); } catch (_) { return ''; }
+}
+
+const TERMS_KEY = 'mc_terms_accepted_v1';
+function loadTermsAccepted() {
+  try { return localStorage.getItem(TERMS_KEY) === '1'; } catch (_) { return false; }
+}
+function saveTermsAccepted() {
+  try { localStorage.setItem(TERMS_KEY, '1'); } catch (_) {}
+}
 // Foto em memória (fallback quando localStorage estoura quota)
 let _photoMemory = '';
 
 function savePhoto(url) {
-  const u = url || '';
+  let u = url || '';
+  if (u && !isSafePhotoUrl(u)) u = '';
   _photoMemory = u;
   try {
-    localStorage.setItem('sh_photo', u);
+    if (u) localStorage.setItem('sh_photo', u);
+    else localStorage.removeItem('sh_photo');
   } catch (err) {
     // Quota cheia: mantém só em memória nesta sessão
     try {
-      if (u && u.length < 4000 && /^https?:\/\//i.test(u)) {
+      if (u && u.length < 4000 && /^https:\/\//i.test(u)) {
         localStorage.setItem('sh_photo', u);
       } else {
         // não remove se já tinha URL curta; só avisa se for data grande
@@ -202,9 +253,10 @@ function savePhoto(url) {
 function loadPhoto() {
   try {
     const stored = localStorage.getItem('sh_photo') || '';
-    if (stored) return stored;
+    if (stored && isSafePhotoUrl(stored)) return stored;
   } catch (_) {}
-  return _photoMemory || '';
+  if (_photoMemory && isSafePhotoUrl(_photoMemory)) return _photoMemory;
+  return '';
 }
 
 // ==================== SOCKET ====================
@@ -964,10 +1016,15 @@ function upsertAudioTile(peerId, stream, name) {
   tile.id = tileId;
   tile.className = 'stream-tile audio-only';
   tile.dataset.peerId = peerId;
-  tile.innerHTML = `
-    <div class="mic-avatar" style="background:linear-gradient(135deg,${col},${col}88)">🎙️</div>
-    <div class="mic-name">${name}</div>
-  `;
+  const micAv = document.createElement('div');
+  micAv.className = 'mic-avatar';
+  micAv.style.background = `linear-gradient(135deg,${col},${col}88)`;
+  micAv.textContent = '🎙️';
+  const micName = document.createElement('div');
+  micName.className = 'mic-name';
+  micName.textContent = String(name || 'Remoto');
+  tile.appendChild(micAv);
+  tile.appendChild(micName);
   attachTileVolumeControls(tile, peerId);
 
   const audio = document.createElement('audio');
@@ -993,11 +1050,20 @@ function updateTileLabel(tile, name, type) {
   if (!label) return;
   const col = nameColor(name);
   const icon = type === 'camera' ? '📹' : '🖥️';
-  label.innerHTML = `
-    <div class="tile-avatar" style="background:linear-gradient(135deg,${col},${col}88)">${nameInitial(name)}</div>
-    <span class="tile-name">${name}</span>
-    <span class="tile-type-badge">${icon}</span>
-  `;
+  while (label.firstChild) label.removeChild(label.firstChild);
+  const av = document.createElement('div');
+  av.className = 'tile-avatar';
+  av.style.background = `linear-gradient(135deg,${col},${col}88)`;
+  av.textContent = nameInitial(name);
+  const nm = document.createElement('span');
+  nm.className = 'tile-name';
+  nm.textContent = String(name || '');
+  const badge = document.createElement('span');
+  badge.className = 'tile-type-badge';
+  badge.textContent = icon;
+  label.appendChild(av);
+  label.appendChild(nm);
+  label.appendChild(badge);
 }
 
 function removeVideoTile(peerId) {
@@ -1639,10 +1705,37 @@ function stopAllMedia() {
   window._mergeAudioStream = null;
   setOutboundAudioTrack(null, null);
   stopComposite();
-  if (screenStream) { screenStream.getVideoTracks().forEach(t => { t.onended = null; t.stop(); }); screenStream.getAudioTracks().forEach(t => t.stop()); screenStream = null; }
-  if (cameraStream) { cameraStream.getTracks().forEach(t => t.stop()); cameraStream = null; }
-  if (micStream)    { micStream.getTracks().forEach(t => t.stop()); micStream = null; }
+
+  const stopStream = (stream) => {
+    if (!stream) return;
+    try {
+      stream.getTracks().forEach(t => {
+        try { t.onended = null; } catch (_) {}
+        try { t.stop(); } catch (_) {}
+      });
+    } catch (_) {}
+  };
+  stopStream(screenStream); screenStream = null;
+  stopStream(cameraStream); cameraStream = null;
+  stopStream(micStream); micStream = null;
+  stopStream(outboundAudioStream); outboundAudioStream = null;
+  outboundAudioTrack = null;
+
+  // Garante liberação de tracks órfãs em peers locais
+  for (const [, entry] of peers) {
+    if (!entry || !entry.pc) continue;
+    try {
+      entry.pc.getSenders().forEach(s => {
+        if (s.track) {
+          try { s.track.stop(); } catch (_) {}
+          try { s.replaceTrack(null); } catch (_) {}
+        }
+      });
+    } catch (_) {}
+  }
+
   isScreenSharing = false; isCameraOn = false; isMicOn = false;
+  screenShareBusy = false;
 }
 
 // ==================== GESTÃO DE SALAS ====================
@@ -1650,16 +1743,16 @@ function stopAllMedia() {
 function validateName() {
   // Tentar usar nome salvo no perfil ou o que estiver no input
   const fromInput = document.getElementById('global-username');
-  const n = (fromInput ? fromInput.value.trim() : '') || loadName();
+  const n = sanitizeUserText((fromInput ? fromInput.value : '') || loadName(), 20);
   if (!n) { showToast('Digite seu apelido antes de continuar', 'error'); enterEditMode(); return null; }
   return n;
 }
 
 async function createRoom() {
   const name = validateName(); if (!name) return;
-  const roomId   = document.getElementById('create-room-id').value.trim().toUpperCase() || generateRoomId();
-  const rName    = document.getElementById('create-room-name').value.trim();
-  const password = document.getElementById('create-password').value.trim();
+  const roomId   = sanitizeUserText(document.getElementById('create-room-id').value, 12).toUpperCase() || generateRoomId();
+  const rName    = sanitizeUserText(document.getElementById('create-room-name').value, 30);
+  const password = sanitizeUserText(document.getElementById('create-password').value, 60);
 
   if (!rName) {
     showToast('Digite o nome da sala antes de criar', 'error');
@@ -1952,24 +2045,40 @@ function loadRoomsList() {
 function renderRoomsList(roomsArr) {
   const c = document.getElementById('rooms-list');
   if (!c) return;
+  while (c.firstChild) c.removeChild(c.firstChild);
   if (!roomsArr || !roomsArr.length) {
-    c.innerHTML = '<p class="rooms-empty">Nenhuma sala disponível no momento.</p>';
+    const empty = document.createElement('p');
+    empty.className = 'rooms-empty';
+    empty.textContent = 'Nenhuma sala disponível no momento.';
+    c.appendChild(empty);
     return;
   }
-  c.innerHTML = '';
   roomsArr.forEach(room => {
+    const safeId = sanitizeUserText(String(room.id || ''), 12).toUpperCase();
+    const safeName = sanitizeUserText(String(room.name || safeId), 50);
+    const safeOwner = sanitizeUserText(String(room.ownerName || ''), 20);
+    const count = Number(room.participantCount) || 0;
     const item = document.createElement('div');
     item.className = 'room-list-item';
-    item.innerHTML = `
-      <div class="room-info">
-        <div class="room-title">${room.name || room.id}</div>
-        <div class="room-meta">${room.hasPassword ? '🔒 ' : ''}${room.participantCount} participante${room.participantCount !== 1 ? 's' : ''} · ${room.ownerName}</div>
-      </div>
-      <div class="room-join-btn">Entrar</div>`;
+    const info = document.createElement('div');
+    info.className = 'room-info';
+    const title = document.createElement('div');
+    title.className = 'room-title';
+    title.textContent = safeName || safeId;
+    const meta = document.createElement('div');
+    meta.className = 'room-meta';
+    meta.textContent = `${room.hasPassword ? '🔒 ' : ''}${count} participante${count !== 1 ? 's' : ''} · ${safeOwner}`;
+    info.appendChild(title);
+    info.appendChild(meta);
+    const joinBtn = document.createElement('div');
+    joinBtn.className = 'room-join-btn';
+    joinBtn.textContent = 'Entrar';
+    item.appendChild(info);
+    item.appendChild(joinBtn);
     item.addEventListener('click', () => {
-      document.getElementById('join-room-id').value = room.id;
+      document.getElementById('join-room-id').value = safeId;
       if (room.hasPassword) { document.getElementById('join-password').focus(); showToast('Esta sala tem senha.', 'info'); }
-      else joinRoom(room.id, '');
+      else joinRoom(safeId, '');
     });
     c.appendChild(item);
   });
@@ -2066,7 +2175,7 @@ function applyAvatarTo(el, name, photoUrl) {
   const safeColor = nameColor(name);
   const url = (photoUrl || '').trim();
   while (el.firstChild) el.removeChild(el.firstChild);
-  if (url && (/^https?:\/\//i.test(url) || /^data:image\//i.test(url))) {
+  if (url && isSafePhotoUrl(url)) {
     el.style.background = 'transparent';
     el.style.padding = '0';
     el.classList.add('has-photo');
@@ -2136,6 +2245,21 @@ function showProfileView() {
   }
 }
 
+function updateTermsUI() {
+  const row = document.getElementById('terms-check-row');
+  const termsEl = document.getElementById('accept-terms');
+  const accepted = loadTermsAccepted();
+  if (row) {
+    if (accepted) row.classList.add('hidden');
+    else row.classList.remove('hidden');
+  }
+  if (termsEl) {
+    termsEl.checked = accepted;
+    // Só pode marcar via modal após ler tudo — não pelo clique direto
+    termsEl.disabled = true;
+  }
+}
+
 function enterEditMode() {
   const name  = loadName();
   const photo = loadPhoto();
@@ -2144,6 +2268,7 @@ function enterEditMode() {
   const editEl     = document.getElementById('profile-edit');
   if (usernameEl) usernameEl.value = name;
   if (photoEl)    photoEl.value    = photo;
+  updateTermsUI();
   if (editEl) editEl.classList.remove('hidden');
   const viewEl = document.getElementById('profile-view');
   if (viewEl) viewEl.classList.add('hidden');
@@ -2159,18 +2284,87 @@ function enterEditMode() {
 function saveProfile() {
   const nameEl  = document.getElementById('global-username');
   const photoEl = document.getElementById('profile-photo-url');
-  const name    = nameEl ? nameEl.value.trim() : '';
-  const photo   = photoEl ? photoEl.value.trim() : '';
+  const name    = sanitizeUserText(nameEl ? nameEl.value : '', 20);
+  let photo     = photoEl ? photoEl.value.trim() : '';
+  if (photo && !isSafePhotoUrl(photo)) photo = '';
 
   if (!name) {
     showToast('Digite seu apelido', 'error');
     if (nameEl) nameEl.focus();
     return;
   }
+  if (!loadTermsAccepted()) {
+    showToast('Leia e aceite a Política de Privacidade e os Termos de Uso para criar o perfil', 'error');
+    openPrivacyModal();
+    return;
+  }
+  if (nameEl) nameEl.value = name;
+  if (photoEl) photoEl.value = photo;
   saveName(name);
   savePhoto(photo);
+  updateTermsUI();
   showProfileView();
   showToast('Perfil salvo!', 'success');
+}
+
+function setPrivacyAcceptEnabled(enabled) {
+  const btn = document.getElementById('btn-privacy-accept');
+  const hint = document.getElementById('privacy-scroll-hint');
+  if (btn) {
+    btn.disabled = !enabled;
+    btn.classList.toggle('is-disabled', !enabled);
+  }
+  if (hint) {
+    if (enabled) hint.classList.add('hidden');
+    else hint.classList.remove('hidden');
+  }
+}
+
+function onPrivacyScroll() {
+  const content = document.getElementById('privacy-content');
+  if (!content) return;
+  const atBottom = content.scrollTop + content.clientHeight >= content.scrollHeight - 12;
+  setPrivacyAcceptEnabled(atBottom);
+}
+
+function openPrivacyModal() {
+  const modal = document.getElementById('modal-privacy');
+  if (!modal) return;
+  modal.classList.remove('hidden');
+  const content = document.getElementById('privacy-content');
+  if (content) {
+    content.scrollTop = 0;
+    // Se o texto couber sem scroll, libera na hora
+    requestAnimationFrame(() => {
+      const needsScroll = content.scrollHeight > content.clientHeight + 8;
+      setPrivacyAcceptEnabled(!needsScroll);
+      if (!needsScroll) return;
+      setPrivacyAcceptEnabled(false);
+    });
+  } else {
+    setPrivacyAcceptEnabled(false);
+  }
+}
+
+function closePrivacyModal() {
+  const modal = document.getElementById('modal-privacy');
+  if (modal) modal.classList.add('hidden');
+}
+
+function acceptPrivacyFromModal() {
+  const content = document.getElementById('privacy-content');
+  if (content) {
+    const atBottom = content.scrollTop + content.clientHeight >= content.scrollHeight - 12;
+    const needsScroll = content.scrollHeight > content.clientHeight + 8;
+    if (needsScroll && !atBottom) {
+      showToast('Role até o final do texto para aceitar', 'error');
+      return;
+    }
+  }
+  saveTermsAccepted();
+  updateTermsUI();
+  closePrivacyModal();
+  showToast('Termos aceitos', 'success');
 }
 
 function handlePhotoUpload(file) {
@@ -2240,6 +2434,39 @@ document.getElementById('generate-room-id').addEventListener('click', () => {
 // Perfil
 document.getElementById('btn-edit-profile').addEventListener('click', enterEditMode);
 document.getElementById('btn-save-profile').addEventListener('click', saveProfile);
+
+// Privacidade / Termos
+const btnPrivacy = document.getElementById('btn-privacy');
+if (btnPrivacy) btnPrivacy.addEventListener('click', openPrivacyModal);
+const linkOpenPrivacy = document.getElementById('link-open-privacy');
+if (linkOpenPrivacy) {
+  linkOpenPrivacy.addEventListener('click', (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    openPrivacyModal();
+  });
+}
+const termsCheckRow = document.getElementById('terms-check-row');
+if (termsCheckRow) {
+  termsCheckRow.addEventListener('click', (e) => {
+    // Clique na linha abre o modal para ler (não marca a caixa direto)
+    if (e.target && e.target.id === 'link-open-privacy') return;
+    e.preventDefault();
+    openPrivacyModal();
+  });
+}
+const btnPrivacyClose = document.getElementById('btn-privacy-close');
+if (btnPrivacyClose) btnPrivacyClose.addEventListener('click', closePrivacyModal);
+const btnPrivacyAccept = document.getElementById('btn-privacy-accept');
+if (btnPrivacyAccept) btnPrivacyAccept.addEventListener('click', acceptPrivacyFromModal);
+const privacyContent = document.getElementById('privacy-content');
+if (privacyContent) privacyContent.addEventListener('scroll', onPrivacyScroll, { passive: true });
+const modalPrivacy = document.getElementById('modal-privacy');
+if (modalPrivacy) {
+  modalPrivacy.addEventListener('click', (e) => {
+    if (e.target === modalPrivacy) closePrivacyModal();
+  });
+}
 document.getElementById('global-username').addEventListener('keypress', e => {
   if (e.key === 'Enter') document.getElementById('profile-photo-url').focus();
 });
@@ -2478,14 +2705,6 @@ function showTileVolumeMenu(x, y, peerId) {
   setTimeout(() => document.addEventListener('pointerdown', onDoc, true), 0);
 }
 
-function escapeHtml(str) {
-  return String(str || '')
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
-    .replace(/"/g, '&quot;');
-}
-
 // ==================== SAIR AO FECHAR / RECARREGAR ====================
 
 // beforeunload: sair ao fechar aba/janela
@@ -2650,7 +2869,7 @@ function addChatMessage(msg) {
 
 function sendChatMessage() {
   const input = document.getElementById('chat-input');
-  const text  = input.value.trim();
+  const text  = sanitizeUserText(input.value, 500);
   if (!text || !socket || !currentRoomId) return;
   socket.emit('chat-message', { text });
   input.value = '';
@@ -3017,6 +3236,7 @@ function setupMobileInstallButton() {
     const el = document.getElementById('global-username');
     if (el) el.value = saved;
   }
+  updateTermsUI();
   showProfileView();
   connectSocket().then(() => fetchRooms());
 

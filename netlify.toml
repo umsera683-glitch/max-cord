@@ -1,7 +1,17 @@
 [build]
-  publish = "."
+  publish = "public"
 
 [[redirects]]
   from = "/*"
   to = "/index.html"
   status = 200
+
+[[headers]]
+  for = "/*"
+  [headers.values]
+    X-Frame-Options = "DENY"
+    X-Content-Type-Options = "nosniff"
+    Referrer-Policy = "strict-origin-when-cross-origin"
+    Permissions-Policy = "camera=(self), microphone=(self), display-capture=(self), geolocation=(), payment=(), usb=()"
+    Cross-Origin-Opener-Policy = "same-origin"
+    Content-Security-Policy = "default-src 'self'; base-uri 'self'; object-src 'none'; frame-ancestors 'none'; form-action 'self'; img-src 'self' data: blob: https:; media-src 'self' blob: mediastream:; font-src 'self' data:; style-src 'self' 'unsafe-inline' https://cdn.tailwindcss.com; script-src 'self' 'unsafe-inline' https://cdn.tailwindcss.com https://cdn.socket.io; connect-src 'self' https://max-cord.onrender.com wss://max-cord.onrender.com https://cdn.socket.io wss://cdn.socket.io https://stun.l.google.com https://stun1.l.google.com https://stun.cloudflare.com; worker-src 'self' blob:; upgrade-insecure-requests"
