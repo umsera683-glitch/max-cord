@@ -1,16 +1,10 @@
-MaxCord — pacote completo atualizado
+MaxCord — badge de termos atualizado
 ====================================
 
-Inclui:
-- server.js, package.json, render.yaml, netlify.toml
-- public/ com scripts OFUSCADOS (app.js, community.js, sw.js, noise-processor.js)
-- style.css minificado
-- index.html com texto dos termos atualizado:
-  "Leia com atenção nossos termos de uso e política de privacidade até o fim"
+Mudanças:
+- Removido o selo "VERIFICADO" ao lado do nome
+- Novo escudo dourado com coroa (TERMOS ACEITOS) ABAIXO do nome
+- No hover: tooltip "Termos de uso e política de privacidade aceitos"
+- Lista de participantes: badge também abaixo do nome (não corta o apelido)
 
-Como publicar (Render):
-1. Extraia este zip na pasta do projeto
-2. npm install
-3. Deploy no Render (ou: node server.js)
-
-Observação: ofuscação dificulta leitura no F12, mas não impede inspeção total.
+Arquivos alterados: public/index.html, public/app.js, public/style.css
