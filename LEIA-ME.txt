@@ -1,0 +1,16 @@
+MaxCord — pacote completo atualizado
+====================================
+
+Inclui:
+- server.js, package.json, render.yaml, netlify.toml
+- public/ com scripts OFUSCADOS (app.js, community.js, sw.js, noise-processor.js)
+- style.css minificado
+- index.html com texto dos termos atualizado:
+  "Leia com atenção nossos termos de uso e política de privacidade até o fim"
+
+Como publicar (Render):
+1. Extraia este zip na pasta do projeto
+2. npm install
+3. Deploy no Render (ou: node server.js)
+
+Observação: ofuscação dificulta leitura no F12, mas não impede inspeção total.

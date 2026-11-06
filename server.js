@@ -328,6 +328,7 @@ io.on('connection', (socket) => {
     const password = sanitizeStr((data || {}).password, 60);
     const userName = sanitizeStr((data || {}).userName, 20);
     const photoUrl = sanitizePhotoUrl((data || {}).photoUrl || '');
+    const termsAccepted = !!(data || {}).termsAccepted;
 
     if (!userName)           return callback({ success: false, message: 'Nome inválido.' });
     if (!isValidRoomId(roomId)) return callback({ success: false, message: 'ID de sala inválido.' });
@@ -348,7 +349,8 @@ io.on('connection', (socket) => {
       name: userName, isOwner: true,
       isBroadcasting: false, broadcastType: null,
       hasMic: false, micMuted: true,
-      photoUrl: photoUrl
+      photoUrl: photoUrl,
+      termsAccepted: termsAccepted
     });
 
     rooms.set(roomId, room);
@@ -371,6 +373,7 @@ io.on('connection', (socket) => {
     const password = sanitizeStr((data || {}).password, 60);
     const userName = sanitizeStr((data || {}).userName, 20);
     const photoUrl = sanitizePhotoUrl((data || {}).photoUrl || '');
+    const termsAccepted = !!(data || {}).termsAccepted;
 
     if (!userName) return callback({ success: false, message: 'Nome inválido.' });
 
@@ -401,7 +404,8 @@ io.on('connection', (socket) => {
       name: userName, isOwner: joiningAsOwner,
       isBroadcasting: false, broadcastType: null,
       hasMic: false, micMuted: true,
-      photoUrl: photoUrl
+      photoUrl: photoUrl,
+      termsAccepted: termsAccepted
     });
 
     socket.join(roomId);
@@ -415,11 +419,14 @@ io.on('connection', (socket) => {
         broadcastType:  p.broadcastType,
         hasMic:         p.hasMic,
         micMuted:       p.micMuted,
-        photoUrl:       p.photoUrl || ''
+        photoUrl:       p.photoUrl || '',
+        termsAccepted:  !!p.termsAccepted
       });
     }
 
-    socket.to(roomId).emit('user-joined', { id: socket.id, name: userName, isOwner: joiningAsOwner, photoUrl });
+    socket.to(roomId).emit('user-joined', {
+      id: socket.id, name: userName, isOwner: joiningAsOwner, photoUrl, termsAccepted
+    });
 
     callback({ success: true, roomId, roomName: room.name, isOwner: joiningAsOwner, participants });
     broadcastRoomList();
