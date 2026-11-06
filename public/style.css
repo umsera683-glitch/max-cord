@@ -2187,7 +2187,7 @@ body {
   display: flex;
   flex-direction: column;
   align-items: flex-start;
-  gap: 4px;
+  gap: 5px;
   min-width: 0;
 }
 .arena-user-name-col .arena-user-name {
@@ -2197,7 +2197,7 @@ body {
   white-space: nowrap;
 }
 
-/* Tag escudo — Termos aceitos (abaixo do nome; tooltip no hover) */
+/* Tag escudo — Termos aceitos (abaixo do nome; clique abre painel no site) */
 .mc-terms-badge {
   display: inline-flex;
   align-items: center;
@@ -2209,18 +2209,22 @@ body {
   background: transparent;
   box-shadow: none;
   line-height: 0;
-  cursor: help;
+  cursor: pointer;
   user-select: none;
   position: relative;
   transition: transform 0.15s ease, filter 0.15s ease;
+  -webkit-tap-highlight-color: transparent;
 }
 .mc-terms-badge:hover {
-  transform: translateY(-1px) scale(1.06);
-  filter: drop-shadow(0 3px 6px rgba(232, 155, 26, 0.45));
+  transform: translateY(-1px) scale(1.07);
+  filter: brightness(1.06);
+}
+.mc-terms-badge:active {
+  transform: scale(0.96);
 }
 .mc-terms-shield {
   display: block;
-  filter: drop-shadow(0 1px 2px rgba(0,0,0,0.25));
+  shape-rendering: geometricPrecision;
 }
 .mc-terms-badge--compact {
   padding: 0;
@@ -2232,7 +2236,7 @@ body {
   flex-direction: column;
   align-items: flex-start;
   justify-content: center;
-  gap: 2px;
+  gap: 3px;
   flex: 1;
   min-width: 0;
 }
@@ -2250,6 +2254,76 @@ body {
   line-height: 0;
 }
 .participant-item .p-name-wrap .mc-terms-badge { flex-shrink: 0; }
+
+/* Painel interno ao clicar na tag de termos */
+.mc-terms-popover {
+  position: fixed;
+  inset: 0;
+  z-index: 9999;
+  background: rgba(8, 6, 18, 0.35);
+  backdrop-filter: blur(2px);
+  -webkit-backdrop-filter: blur(2px);
+}
+.mc-terms-popover.hidden { display: none !important; }
+.mc-terms-popover-card {
+  position: fixed;
+  width: min(300px, calc(100vw - 24px));
+  padding: 14px 16px 16px;
+  border-radius: 16px;
+  background: var(--bg-elevated, #1a1528);
+  border: 1px solid rgba(168, 85, 247, 0.35);
+  box-shadow:
+    0 0 0 1px rgba(255, 255, 255, 0.04),
+    0 12px 40px rgba(0, 0, 0, 0.45),
+    0 0 24px rgba(124, 58, 237, 0.18);
+  color: var(--text-primary, #f3eefc);
+  font-family: inherit;
+}
+.mc-terms-popover-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+.mc-terms-popover-icon {
+  font-size: 18px;
+  line-height: 1;
+}
+.mc-terms-popover-title {
+  margin: 0;
+  flex: 1;
+  font-size: 15px;
+  font-weight: 700;
+  color: var(--text-primary, #f3eefc);
+}
+.mc-terms-popover-close {
+  border: none;
+  background: rgba(255,255,255,0.08);
+  color: var(--text-secondary, #c4b5d9);
+  width: 28px;
+  height: 28px;
+  border-radius: 8px;
+  cursor: pointer;
+  font-size: 14px;
+  line-height: 1;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+.mc-terms-popover-close:hover {
+  background: rgba(255,255,255,0.14);
+  color: #fff;
+}
+.mc-terms-popover-text {
+  margin: 0;
+  font-size: 13px;
+  line-height: 1.45;
+  color: var(--text-secondary, #c4b5d9);
+}
+.mc-terms-popover-text strong {
+  color: var(--text-primary, #f3eefc);
+  font-weight: 650;
+}
 
 .arena-nav { display: flex; flex-direction: column; gap: 4px; flex: 1; }
 .arena-nav-label {

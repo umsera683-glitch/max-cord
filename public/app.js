@@ -268,29 +268,69 @@ function formatTermsDate(iso) {
 
 /** Emblema MaxCord — marca de quem aceitou os Termos / Privacidade */
 function createTermsBadgeEl(compact) {
-  const el = document.createElement('span');
+  const el = document.createElement('button');
+  el.type = 'button';
   el.className = 'mc-terms-badge' + (compact ? ' mc-terms-badge--compact' : '');
-  el.title = 'Termos de uso e política de privacidade aceitos';
   el.setAttribute('aria-label', 'Termos de uso e política de privacidade aceitos');
-  // Escudo dourado + coroa roxa (tag de termos). No compact só o ícone; tooltip no hover.
-  const w = compact ? 16 : 22;
-  const h = compact ? 19 : 26;
+  const w = compact ? 20 : 28;
+  const h = compact ? 24 : 34;
   const gid = 'mcSg' + Math.random().toString(36).slice(2, 9);
+  const fid = 'mcSf' + Math.random().toString(36).slice(2, 9);
   el.innerHTML = `
-    <svg class="mc-terms-shield" viewBox="0 0 40 48" width="${w}" height="${h}" aria-hidden="true">
+    <svg class="mc-terms-shield" viewBox="0 0 80 96" width="${w}" height="${h}" aria-hidden="true">
       <defs>
         <linearGradient id="${gid}" x1="0%" y1="0%" x2="100%" y2="100%">
-          <stop offset="0%" stop-color="#ffe08a"/>
-          <stop offset="45%" stop-color="#f5b942"/>
-          <stop offset="100%" stop-color="#e89b1a"/>
+          <stop offset="0%" stop-color="#fff3c4"/>
+          <stop offset="35%" stop-color="#ffd56a"/>
+          <stop offset="70%" stop-color="#f0a93a"/>
+          <stop offset="100%" stop-color="#d4881a"/>
         </linearGradient>
+        <filter id="${fid}" x="-20%" y="-10%" width="140%" height="140%">
+          <feDropShadow dx="0" dy="1.5" stdDeviation="1.2" flood-color="#000" flood-opacity="0.28"/>
+        </filter>
       </defs>
-      <path fill="url(#${gid})" stroke="#c47d12" stroke-width="1.2" d="M20 2c2.2 0 4 .8 4 2.2V6h6.5c1.4 0 2.5 1.1 2.5 2.5v14.2c0 9.2-5.2 15.8-13 19.8-7.8-4-13-10.6-13-19.8V8.5C7 7.1 8.1 6 9.5 6H16V4.2C16 2.8 17.8 2 20 2z"/>
-      <path fill="#6d28d9" d="M20 11.2l1.6 1.2 1.9-.2.7 1.8 1.7.8-.7 1.8.5 1.9-1.7.8-.7 1.8-1.9-.2L20 22l-1.4-1.3-1.9.2-.7-1.8-1.7-.8.5-1.9-.7-1.8 1.7-.8.7-1.8 1.9.2L20 11.2z"/>
-      <text x="20" y="36" text-anchor="middle" font-size="5.2" font-weight="800" fill="#5b21b6" font-family="system-ui,sans-serif">TERMOS</text>
-      <text x="20" y="41.5" text-anchor="middle" font-size="5.2" font-weight="800" fill="#5b21b6" font-family="system-ui,sans-serif">ACEITOS</text>
+      <path filter="url(#${fid})" fill="url(#${gid})" stroke="#b87510" stroke-width="2" stroke-linejoin="round"
+        d="M40 4c3.5 0 7 1.4 7 3.8V10h12c2.8 0 5 2.2 5 5v28c0 18-10.5 31.5-24 39.5C26.5 74.5 16 61 16 43V15c0-2.8 2.2-5 5-5h12V7.8C33 5.4 36.5 4 40 4z"/>
+      <path fill="#6d28d9" stroke="#4c1d95" stroke-width="0.8" stroke-linejoin="round"
+        d="M40 22l4.2 3.2 5.1-.5 1.9 4.8 4.6 2.2-1.9 4.9 1.4 5-4.6 2.1-1.9 4.8-5.1-.6L40 51.5l-3.7-3.6-5.1.6-1.9-4.8-4.6-2.1 1.4-5-1.9-4.9 4.6-2.2 1.9-4.8 5.1.5L40 22z"/>
+      <circle cx="40" cy="36" r="2.2" fill="#c4b5fd"/>
+      <text x="40" y="70" text-anchor="middle" font-size="9.5" font-weight="800" fill="#4c1d95" font-family="system-ui,-apple-system,sans-serif" letter-spacing="0.5">TERMOS</text>
+      <text x="40" y="81" text-anchor="middle" font-size="9.5" font-weight="800" fill="#4c1d95" font-family="system-ui,-apple-system,sans-serif" letter-spacing="0.5">ACEITOS</text>
     </svg>`;
+  el.addEventListener('click', (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    openTermsBadgePopover(el);
+  });
   return el;
+}
+
+function openTermsBadgePopover(anchorEl) {
+  const pop = document.getElementById('mc-terms-popover');
+  if (!pop) return;
+  pop.classList.remove('hidden');
+  const r = anchorEl.getBoundingClientRect();
+  const card = pop.querySelector('.mc-terms-popover-card');
+  const pad = 10;
+  let top = r.bottom + 8;
+  let left = r.left + r.width / 2;
+  pop.style.top = '0px';
+  pop.style.left = '0px';
+  const cw = card.offsetWidth || 260;
+  const ch = card.offsetHeight || 120;
+  left = Math.min(Math.max(pad + cw / 2, left), window.innerWidth - pad - cw / 2);
+  if (top + ch + pad > window.innerHeight) {
+    top = Math.max(pad, r.top - ch - 8);
+  }
+  card.style.position = 'fixed';
+  card.style.top = top + 'px';
+  card.style.left = left + 'px';
+  card.style.transform = 'translateX(-50%)';
+}
+
+function closeTermsBadgePopover() {
+  const pop = document.getElementById('mc-terms-popover');
+  if (pop) pop.classList.add('hidden');
 }
 
 function updateProfileTermsBadge() {
@@ -2606,6 +2646,36 @@ const btnPrivacyAccept = document.getElementById('btn-privacy-accept');
 if (btnPrivacyAccept) btnPrivacyAccept.addEventListener('click', acceptPrivacyFromModal);
 const privacyContent = document.getElementById('privacy-content');
 if (privacyContent) privacyContent.addEventListener('scroll', onPrivacyScroll, { passive: true });
+
+// Badge de termos: clique abre painel interno (não tooltip do navegador)
+(function setupTermsBadgePopover() {
+  const profileBadge = document.getElementById('profile-terms-badge');
+  if (profileBadge) {
+    profileBadge.addEventListener('click', (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      openTermsBadgePopover(profileBadge);
+    });
+  }
+  const closeBtn = document.getElementById('mc-terms-popover-close');
+  if (closeBtn) closeBtn.addEventListener('click', closeTermsBadgePopover);
+  const pop = document.getElementById('mc-terms-popover');
+  if (pop) {
+    pop.addEventListener('click', (e) => {
+      if (e.target === pop) closeTermsBadgePopover();
+    });
+  }
+  document.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape') closeTermsBadgePopover();
+  });
+  document.addEventListener('click', (e) => {
+    const pop = document.getElementById('mc-terms-popover');
+    if (!pop || pop.classList.contains('hidden')) return;
+    if (e.target.closest('.mc-terms-badge') || e.target.closest('.mc-terms-popover-card')) return;
+    closeTermsBadgePopover();
+  });
+})();
+
 const modalPrivacy = document.getElementById('modal-privacy');
 if (modalPrivacy) {
   modalPrivacy.addEventListener('click', (e) => {

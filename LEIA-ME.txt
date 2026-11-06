@@ -1,10 +1,6 @@
-MaxCord — badge de termos atualizado
-====================================
-
-Mudanças:
-- Removido o selo "VERIFICADO" ao lado do nome
-- Novo escudo dourado com coroa (TERMOS ACEITOS) ABAIXO do nome
-- No hover: tooltip "Termos de uso e política de privacidade aceitos"
-- Lista de participantes: badge também abaixo do nome (não corta o apelido)
-
-Arquivos alterados: public/index.html, public/app.js, public/style.css
+MaxCord — tag de termos (clique + escudo HD)
+============================================
+- Badge abaixo do nome
+- Escudo SVG em alta resolução
+- Clique na tag → painel interno do site
+- Fecha com ✕, clique fora ou Esc
