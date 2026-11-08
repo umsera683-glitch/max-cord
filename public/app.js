@@ -238,6 +238,41 @@ function loadName() {
   try { return sanitizeUserText(localStorage.getItem('sh_username') || '', 20); } catch (_) { return ''; }
 }
 
+/** Quando mudar este valor, todos os navegadores apagam perfil local e pedem conta nova. */
+const ACCOUNTS_EPOCH = '2026-11-08-reset-v1';
+const ACCOUNTS_EPOCH_KEY = 'mc_accounts_epoch';
+
+function clearLocalProfileData() {
+  try {
+    localStorage.removeItem('sh_username');
+    localStorage.removeItem('sh_photo');
+    localStorage.removeItem('mc_user_id');
+    // Força recriar perfil (e reaceitar fluxo de conta)
+    localStorage.removeItem(TERMS_KEY);
+    localStorage.removeItem(TERMS_META_KEY);
+  } catch (_) {}
+  try {
+    sessionStorage.removeItem('mc_closed_anns');
+  } catch (_) {}
+  window.__mcIsAdmin = false;
+  window.__mcUserId = null;
+  myName = '';
+}
+
+/** Limpa contas antigas do navegador uma vez (site reiniciou contagem de contas). */
+function ensureFreshAccountsEpoch() {
+  try {
+    const cur = localStorage.getItem(ACCOUNTS_EPOCH_KEY);
+    if (cur === ACCOUNTS_EPOCH) return false;
+    clearLocalProfileData();
+    localStorage.setItem(ACCOUNTS_EPOCH_KEY, ACCOUNTS_EPOCH);
+    return true;
+  } catch (_) {
+    clearLocalProfileData();
+    return true;
+  }
+}
+
 const TERMS_KEY = 'mc_terms_accepted_v1';
 const TERMS_META_KEY = 'mc_terms_meta_v1';
 
@@ -572,21 +607,18 @@ function setupSocketListeners() {
     if (currentRoomId) renderParticipantsList();
   });
 
-  // Admin apagou esta conta
+  // Admin apagou esta conta (ou reset geral)
   socket.on('account-deleted', (data) => {
     showToast((data && data.message) || 'Sua conta foi removida pela administração.', 'error');
-    try {
-      localStorage.removeItem('sh_username');
-      localStorage.removeItem('mc_user_id');
-      // Mantém termos aceitos, só limpa o perfil
-    } catch (_) {}
-    myName = '';
+    clearLocalProfileData();
     const el = document.getElementById('global-username');
     if (el) el.value = '';
+    const photoEl = document.getElementById('profile-photo-url');
+    if (photoEl) photoEl.value = '';
     if (currentRoomId) leaveRoom(false);
     setTimeout(() => {
       showProfileView();
-      enterEditMode && enterEditMode();
+      if (typeof enterEditMode === 'function') enterEditMode();
     }, 400);
   });
 
@@ -4105,6 +4137,12 @@ function setupAdminUI() {
   // Aplicar tema salvo ANTES de tudo (evita flash de tema errado)
   applyTheme(loadTheme());
 
+  // Zera perfis antigos do navegador: site recomeçou contagem de contas
+  const wiped = ensureFreshAccountsEpoch();
+  if (wiped) {
+    console.info('[MaxCord] Contas resetadas — crie o perfil novamente.');
+  }
+
   // Restaurar qualidade salva
   try {
     const savedQ = localStorage.getItem('mc_quality');
@@ -4125,10 +4163,10 @@ function setupAdminUI() {
   } catch (_) {}
 
   const saved = loadName();
-  if (saved) {
-    const el = document.getElementById('global-username');
-    if (el) el.value = saved;
-  }
+  const nameEl = document.getElementById('global-username');
+  if (nameEl) nameEl.value = saved || '';
+  const photoEl = document.getElementById('profile-photo-url');
+  if (photoEl && !loadPhoto()) photoEl.value = '';
   updateTermsUI();
   showProfileView();
   setupAdminUI();
