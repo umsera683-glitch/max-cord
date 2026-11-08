@@ -255,9 +255,7 @@ function clearLocalProfileData() {
     localStorage.removeItem(TERMS_KEY);
     localStorage.removeItem(TERMS_META_KEY);
   } catch (_) {}
-  try {
-    sessionStorage.removeItem('mc_closed_anns');
-  } catch (_) {}
+  // Não apaga avisos fechados: o usuário que fechou não deve vê-los de novo
   _photoMemory = '';
   try { idbSetPhoto(''); } catch (_) {}
   window.__mcIsAdmin = false;
@@ -3825,36 +3823,74 @@ function updateAdminUI() {
   if (btnAcc) btnAcc.classList.toggle('hidden', !show);
 }
 
+const CLOSED_ANNS_KEY = 'mc_closed_anns';
+const ANN_TTL_MS_CLIENT = 24 * 60 * 60 * 1000;
+
+function loadClosedAnnouncementIds() {
+  try {
+    // localStorage: sobrevive a fechar o navegador (sessionStorage reaparecia)
+    const raw = localStorage.getItem(CLOSED_ANNS_KEY) || sessionStorage.getItem(CLOSED_ANNS_KEY) || '[]';
+    const arr = JSON.parse(raw);
+    return Array.isArray(arr) ? arr.filter(x => typeof x === 'string') : [];
+  } catch (_) {
+    return [];
+  }
+}
+
+function markAnnouncementClosed(id) {
+  if (!id) return;
+  try {
+    const closed = loadClosedAnnouncementIds();
+    if (!closed.includes(id)) closed.push(id);
+    // Mantém só os últimos 50 ids fechados
+    const trimmed = closed.slice(-50);
+    localStorage.setItem(CLOSED_ANNS_KEY, JSON.stringify(trimmed));
+    try { sessionStorage.removeItem(CLOSED_ANNS_KEY); } catch (_) {}
+  } catch (_) {}
+}
+
+function isAnnouncementClosedLocally(id) {
+  return loadClosedAnnouncementIds().includes(id);
+}
+
+function isAnnouncementExpiredClient(ann) {
+  if (!ann) return true;
+  const now = Date.now();
+  if (ann.expiresAt && now >= Number(ann.expiresAt)) return true;
+  if (ann.at && now - Number(ann.at) >= ANN_TTL_MS_CLIENT) return true;
+  return false;
+}
+
 function showSiteAnnouncement(ann, opts) {
   if (!ann || !ann.id) return;
   const root = document.getElementById('site-announcements');
   if (!root) return;
-  // Evita duplicar
+  // Expirado (24h): não mostra para ninguém
+  if (isAnnouncementExpiredClient(ann)) return;
+  // Já fechou este aviso: não mostra de novo (só aviso NOVO aparece)
+  if (isAnnouncementClosedLocally(ann.id)) return;
+  // Evita duplicar na tela
   if (document.getElementById('ann-' + ann.id)) return;
-
-  // Respeita fechamentos locais desta sessão
-  try {
-    const closed = JSON.parse(sessionStorage.getItem('mc_closed_anns') || '[]');
-    if (closed.includes(ann.id)) return;
-  } catch (_) {}
 
   const el = document.createElement('div');
   el.className = 'site-announcement';
   el.id = 'ann-' + ann.id;
   el.setAttribute('role', 'status');
+  el.dataset.annId = ann.id;
+  if (ann.expiresAt) el.dataset.expiresAt = String(ann.expiresAt);
+  else if (ann.at) el.dataset.expiresAt = String(Number(ann.at) + ANN_TTL_MS_CLIENT);
 
   const body = document.createElement('div');
   body.className = 'site-announcement-body';
   const text = document.createElement('div');
   text.className = 'site-announcement-text';
   text.textContent = ann.text || '';
-  // Permite texto longo sem cortar visualmente demais
   text.style.whiteSpace = 'pre-wrap';
   text.style.wordBreak = 'break-word';
   const meta = document.createElement('div');
   meta.className = 'site-announcement-meta';
   const when = ann.at ? new Date(ann.at).toLocaleString('pt-BR', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' }) : '';
-  meta.textContent = (ann.from ? 'Por ' + ann.from : 'Administração') + (when ? ' · ' + when : '');
+  meta.textContent = (ann.from ? 'Por ' + ann.from : 'Administração') + (when ? ' · ' + when : '') + ' · some em 24h';
   body.appendChild(text);
   body.appendChild(meta);
 
@@ -3865,13 +3901,7 @@ function showSiteAnnouncement(ann, opts) {
   close.textContent = '✕';
   close.addEventListener('click', () => {
     removeSiteAnnouncement(ann.id);
-    try {
-      const closed = JSON.parse(sessionStorage.getItem('mc_closed_anns') || '[]');
-      if (!closed.includes(ann.id)) {
-        closed.push(ann.id);
-        sessionStorage.setItem('mc_closed_anns', JSON.stringify(closed.slice(-30)));
-      }
-    } catch (_) {}
+    markAnnouncementClosed(ann.id);
   });
 
   el.appendChild(body);
@@ -3892,6 +3922,20 @@ function clearAllSiteAnnouncements() {
   const root = document.getElementById('site-announcements');
   if (root) root.innerHTML = '';
 }
+
+/** Remove da tela avisos que passaram de 24h (cliente). */
+function sweepExpiredAnnouncementUI() {
+  const root = document.getElementById('site-announcements');
+  if (!root) return;
+  const now = Date.now();
+  root.querySelectorAll('.site-announcement').forEach(el => {
+    const exp = Number(el.dataset.expiresAt || 0);
+    if (exp && now >= exp) el.remove();
+  });
+}
+
+// Varre avisos expirados a cada minuto
+setInterval(sweepExpiredAnnouncementUI, 60 * 1000);
 
 async function openAdminAnnounceModal() {
   if (!isLocalAdmin()) {

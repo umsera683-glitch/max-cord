@@ -201,14 +201,59 @@ const ACCOUNTS_FILE = path.join(__dirname, 'data', 'accounts.json');
 let accountSeq = 100;
 let saveAccountsTimer = null;
 
-/** Avisos flutuantes ativos no site (id → { id, text, from, at }). */
+/** Avisos flutuantes ativos no site (id → { id, text, from, at, expiresAt }). */
 const siteAnnouncements = new Map();
 const ANNOUNCEMENTS_FILE = path.join(__dirname, 'data', 'announcements.json');
+/** Avisos expiram automaticamente após 24 horas. */
+const ANN_TTL_MS = 24 * 60 * 60 * 1000;
 let announcementSeq = 1;
 let saveAnnouncementsTimer = null;
 
 function isAdminName(name) {
   return typeof name === 'string' && name.trim().toLowerCase() === ADMIN_DISPLAY_NAME;
+}
+
+function isAnnouncementExpired(ann, now) {
+  if (!ann) return true;
+  const t = now || Date.now();
+  if (ann.expiresAt && t >= ann.expiresAt) return true;
+  if (ann.at && t - ann.at >= ANN_TTL_MS) return true;
+  return false;
+}
+
+/** Remove avisos com mais de 24h e grava se mudou. */
+function purgeExpiredAnnouncements() {
+  const now = Date.now();
+  const removedIds = [];
+  for (const [id, ann] of siteAnnouncements) {
+    if (isAnnouncementExpired(ann, now)) {
+      siteAnnouncements.delete(id);
+      removedIds.push(id);
+    }
+  }
+  if (removedIds.length > 0) {
+    scheduleSaveAnnouncements();
+    // Remove só os expirados na UI (não limpa avisos ainda válidos)
+    for (const id of removedIds) {
+      try { io.emit('site-announcement-cleared', { id, reason: 'expired' }); } catch (_) {}
+    }
+    console.log(`[Avisos] ${removedIds.length} aviso(s) expirado(s) removido(s)`);
+  }
+  return removedIds.length;
+}
+
+function getActiveAnnouncements() {
+  const now = Date.now();
+  // Limpa expirados sem emitir se já estivermos só listando (emissão fica no purge periódico)
+  for (const [id, ann] of siteAnnouncements) {
+    if (isAnnouncementExpired(ann, now)) siteAnnouncements.delete(id);
+  }
+  const list = [];
+  for (const ann of siteAnnouncements.values()) {
+    if (!isAnnouncementExpired(ann, now)) list.push(ann);
+  }
+  list.sort((a, b) => (b.at || 0) - (a.at || 0));
+  return list;
 }
 
 function loadAnnouncementsFromDisk() {
@@ -217,18 +262,23 @@ function loadAnnouncementsFromDisk() {
     const raw = fs.readFileSync(ANNOUNCEMENTS_FILE, 'utf8');
     const data = JSON.parse(raw);
     if (!data || !Array.isArray(data.announcements)) return;
+    const now = Date.now();
     for (const ann of data.announcements) {
       if (!ann || !ann.id || !ann.text) continue;
+      const at = ann.at || Date.now();
+      const expiresAt = ann.expiresAt || (at + ANN_TTL_MS);
+      if (now >= expiresAt) continue; // já expirado no disco
       siteAnnouncements.set(String(ann.id), {
         id: String(ann.id),
         text: String(ann.text).slice(0, 20000),
         from: String(ann.from || ADMIN_DISPLAY_NAME).slice(0, 40),
-        at: ann.at || Date.now()
+        at,
+        expiresAt
       });
       const num = parseInt(String(ann.id).replace(/\D/g, ''), 10);
       if (!isNaN(num) && num >= announcementSeq) announcementSeq = num + 1;
     }
-    console.log(`[Avisos] ${siteAnnouncements.size} aviso(s) carregado(s) do disco`);
+    console.log(`[Avisos] ${siteAnnouncements.size} aviso(s) ativo(s) carregado(s) do disco`);
   } catch (err) {
     console.warn('[Avisos] Falha ao carregar announcements.json:', err.message);
   }
@@ -238,7 +288,11 @@ function saveAnnouncementsToDisk() {
   try {
     const dir = path.dirname(ANNOUNCEMENTS_FILE);
     if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
-    const list = Array.from(siteAnnouncements.values());
+    const now = Date.now();
+    const list = [];
+    for (const ann of siteAnnouncements.values()) {
+      if (!isAnnouncementExpired(ann, now)) list.push(ann);
+    }
     fs.writeFileSync(ANNOUNCEMENTS_FILE, JSON.stringify({ announcements: list }, null, 2), 'utf8');
   } catch (err) {
     console.warn('[Avisos] Falha ao salvar announcements.json:', err.message);
@@ -523,7 +577,7 @@ function generateRoomId() {
   return id;
 }
 
-// Limpeza periódica
+// Limpeza periódica (salas vazias + avisos com mais de 24h)
 setInterval(() => {
   const now = Date.now();
   let changed = false;
@@ -535,6 +589,7 @@ setInterval(() => {
     }
   }
   if (changed) broadcastRoomList();
+  try { purgeExpiredAnnouncements(); } catch (_) {}
   // Limpar contadores de rate do socket
   for (const [key, data] of socketEventCounts) {
     if (Date.now() > data.resetAt + 60000) socketEventCounts.delete(key);
@@ -601,11 +656,12 @@ function handleLeave(socket) {
 io.on('connection', (socket) => {
   console.log(`[+] ${socket.id} (${socket.handshake.address})`);
 
-  // Empurra avisos ativos assim que o cliente conecta (não depende só do pedido do browser)
-  if (siteAnnouncements.size > 0) {
-    socket.emit('site-announcements-sync', {
-      announcements: Array.from(siteAnnouncements.values())
-    });
+  // Empurra avisos ativos (não expirados) assim que o cliente conecta
+  {
+    const active = getActiveAnnouncements();
+    if (active.length > 0) {
+      socket.emit('site-announcements-sync', { announcements: active });
+    }
   }
 
   // ---------- Listar salas ----------
@@ -934,12 +990,15 @@ io.on('connection', (socket) => {
     if (text.length > 20000) text = text.slice(0, 20000);
     if (!text) return callback({ success: false, message: 'Texto do aviso vazio.' });
 
+    purgeExpiredAnnouncements();
     const id = 'ann-' + (announcementSeq++);
+    const now = Date.now();
     const ann = {
       id,
       text,
       from: socket.userName || ADMIN_DISPLAY_NAME,
-      at: Date.now()
+      at: now,
+      expiresAt: now + ANN_TTL_MS
     };
     siteAnnouncements.set(id, ann);
     // Limita quantos avisos ficam guardados
@@ -951,7 +1010,7 @@ io.on('connection', (socket) => {
     // Envia para TODOS os clientes conectados (qualquer página/computador)
     io.emit('site-announcement', ann);
     callback({ success: true, announcement: ann });
-    console.log(`[Admin] Aviso publicado por ${ann.from} → ${io.engine.clientsCount} cliente(s): ${text.slice(0, 60)}`);
+    console.log(`[Admin] Aviso publicado por ${ann.from} → ${io.engine.clientsCount} cliente(s), expira em 24h: ${text.slice(0, 60)}`);
   });
 
   socket.on('admin-clear-announcement', (data, callback) => {
@@ -967,10 +1026,10 @@ io.on('connection', (socket) => {
     callback({ success: true });
   });
 
-  // Cliente pede avisos ativos ao conectar / abrir o site
+  // Cliente pede avisos ativos (não expirados) ao conectar / abrir o site
   socket.on('get-announcements', (callback) => {
     if (typeof callback !== 'function') return;
-    callback({ announcements: Array.from(siteAnnouncements.values()) });
+    callback({ announcements: getActiveAnnouncements() });
   });
 
   // Checagem de nome único (ao salvar perfil, antes de entrar em sala)
