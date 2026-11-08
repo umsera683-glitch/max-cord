@@ -2117,8 +2117,11 @@ body {
 .arena-layout.lobby-root {
   display: flex;
   flex-direction: row;
-  min-height: 100vh;
-  min-height: 100dvh;
+  height: 100vh;
+  height: 100dvh;
+  max-height: 100vh;
+  max-height: 100dvh;
+  min-height: 0;
   overflow: hidden;
   background: #060a14;
 }
@@ -2368,6 +2371,7 @@ body {
 .arena-main {
   flex: 1;
   min-width: 0;
+  min-height: 0;
   display: flex;
   flex-direction: column;
   overflow: hidden;
@@ -2404,8 +2408,14 @@ body {
 
 .arena-scroll {
   flex: 1;
+  min-height: 0;
+  overflow-x: hidden;
   overflow-y: auto;
+  -webkit-overflow-scrolling: touch;
+  overscroll-behavior: contain;
+  touch-action: pan-y;
   padding: 18px 20px 32px;
+  padding-bottom: calc(32px + env(safe-area-inset-bottom, 0px));
   display: flex;
   flex-direction: column;
   gap: 16px;
@@ -2530,20 +2540,27 @@ body {
 .arena-layout .lobby-hero,
 .arena-layout .lobby-bg { display: none !important; }
 
-/* Mobile: sidebar vira barra superior */
+/* Mobile: sidebar vira barra superior + rolagem confiável */
 @media (max-width: 900px) {
   .arena-layout.lobby-root {
     flex-direction: column;
+    height: 100vh;
+    height: 100dvh;
+    max-height: 100dvh;
   }
   .arena-sidebar {
     width: 100%;
+    flex-shrink: 0;
     flex-direction: row;
     flex-wrap: wrap;
     align-items: center;
     gap: 8px;
     padding: 10px 12px;
+    padding-top: max(10px, env(safe-area-inset-top, 0px));
     border-right: none;
     border-bottom: 1px solid rgba(120,140,255,0.12);
+    overflow: visible;
+    max-height: none;
   }
   .arena-side-top {
     display: flex;
@@ -2552,7 +2569,7 @@ body {
     width: 100%;
   }
   .arena-brand { margin-bottom: 0; }
-  .arena-user { margin-bottom: 0; flex: 1; padding: 6px 8px; }
+  .arena-user { margin-bottom: 0; flex: 1; min-width: 0; padding: 6px 8px; }
   .arena-nav {
     flex-direction: row;
     flex-wrap: wrap;
@@ -2564,7 +2581,17 @@ body {
   .arena-side-bottom { display: none; }
   .arena-hero-art { display: none; }
   .arena-action-grid { grid-template-columns: 1fr; }
-  .arena-scroll { padding: 12px; }
+  .arena-main {
+    flex: 1;
+    min-height: 0;
+    overflow: hidden;
+  }
+  .arena-scroll {
+    padding: 12px;
+    padding-bottom: calc(28px + env(safe-area-inset-bottom, 0px));
+    -webkit-overflow-scrolling: touch;
+    touch-action: pan-y;
+  }
   .arena-topbar { padding: 10px 12px; }
 }
 
@@ -2628,12 +2655,41 @@ body {
   .arena-brand-name { font-size: 16px; }
   .arena-user-avatar { width: 36px; height: 36px; font-size: 12px; }
   .arena-card { padding: 14px; border-radius: 16px; }
-  .arena-scroll { gap: 12px; padding-bottom: 24px; }
+  .arena-scroll {
+    gap: 12px;
+    padding-bottom: calc(28px + env(safe-area-inset-bottom, 0px));
+  }
   /* Better touch targets */
   .btn-primary, .btn-secondary, .btn-secondary-solid, .btn-ghost-sm {
     min-height: 44px;
   }
-  .input-field { min-height: 44px; font-size: 16px; } /* avoid iOS zoom */
+  .input-field, textarea, select {
+    min-height: 44px;
+    font-size: 16px; /* evita zoom automático no iOS */
+  }
+  .modal-overlay {
+    align-items: flex-end;
+    overflow-y: auto;
+    -webkit-overflow-scrolling: touch;
+  }
+  .modal-box {
+    max-height: min(92dvh, 92vh);
+    overflow-y: auto;
+    -webkit-overflow-scrolling: touch;
+    margin-bottom: env(safe-area-inset-bottom, 0px);
+  }
+  .room-view {
+    height: 100vh;
+    height: 100dvh;
+    max-height: 100dvh;
+  }
+  .room-body {
+    min-height: 0;
+  }
+  .streams-area {
+    -webkit-overflow-scrolling: touch;
+    touch-action: pan-y;
+  }
 }
 
 @media (max-width: 480px) {

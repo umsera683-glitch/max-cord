@@ -193,7 +193,9 @@ function sanitizeUserText(val, maxLen) {
   return s;
 }
 
-const MAX_PHOTO_DATA_LEN = 1500000;
+/** ~5MB em data URL (GIF/imagem). Arquivo original costuma ser ~30% menor. */
+const MAX_PHOTO_DATA_LEN = 5 * 1024 * 1024;
+const MAX_PHOTO_FILE_BYTES = 8 * 1024 * 1024;
 
 function isSafePhotoUrl(url) {
   if (typeof url !== 'string') return false;
@@ -2905,7 +2907,7 @@ function applyPhotoToProfileField(dataUrl, opts) {
   opts = opts || {};
   if (!dataUrl || !isSafePhotoUrl(dataUrl)) {
     if (dataUrl && dataUrl.startsWith('data:') && dataUrl.length > MAX_PHOTO_DATA_LEN) {
-      showToast('Arquivo muito grande para o perfil. Use um GIF/imagem menor (até ~1MB) ou cole um link https.', 'error');
+      showToast('Arquivo ainda grande demais. Tente outro GIF ou cole um link https no campo da foto.', 'error');
     } else {
       showToast('Imagem inválida', 'error');
     }
@@ -2926,15 +2928,14 @@ function handlePhotoUpload(file) {
     showToast('Selecione uma imagem ou GIF', 'error');
     return;
   }
-  // Limite de arquivo: 5MB (data URL fica ~33% maior)
-  if (file.size > 5 * 1024 * 1024) {
-    showToast('Arquivo acima de 5MB. Use uma imagem/GIF menor ou cole um link https (Tenor, Giphy, Imgur…).', 'error');
+  if (file.size > MAX_PHOTO_FILE_BYTES) {
+    showToast('Arquivo acima de 8MB. Use um arquivo menor ou cole um link https no campo da foto.', 'error');
     return;
   }
   const isGif = /image\/gif/i.test(file.type) || /\.gif$/i.test(file.name);
 
   if (isGif) {
-    // GIF: mantém animação intacta (não passa por canvas)
+    // GIF: mantém animação (não passa por canvas)
     const reader = new FileReader();
     reader.onload = (e) => {
       const dataUrl = e.target.result;
@@ -2942,8 +2943,9 @@ function handlePhotoUpload(file) {
         showToast('Não foi possível ler o GIF', 'error');
         return;
       }
+      // Aceita até o limite alto; só recusa se realmente estourar o buffer
       if (dataUrl.length > MAX_PHOTO_DATA_LEN) {
-        showToast('GIF muito grande. Comprima o arquivo (até ~1MB) ou use um link do Tenor/Giphy.', 'error');
+        showToast('Este GIF passou do limite interno. Cole o link do GIF (Tenor/Giphy) no campo da foto.', 'error');
         return;
       }
       applyPhotoToProfileField(dataUrl);
@@ -2953,12 +2955,12 @@ function handlePhotoUpload(file) {
     return;
   }
 
-  // Imagem estática: redimensiona e comprime (até 320px, boa qualidade)
+  // Imagem estática: redimensiona e comprime (até 384px)
   const reader = new FileReader();
   reader.onload = (e) => {
     const img = new Image();
     img.onload = () => {
-      const max = 320;
+      const max = 384;
       let w = img.width, h = img.height;
       if (w > max || h > max) {
         if (w > h) { h = Math.round(h * max / w); w = max; }
@@ -2970,9 +2972,9 @@ function handlePhotoUpload(file) {
       ctx.imageSmoothingEnabled = true;
       ctx.imageSmoothingQuality = 'high';
       ctx.drawImage(img, 0, 0, w, h);
-      let dataUrl = c.toDataURL('image/webp', 0.88);
+      let dataUrl = c.toDataURL('image/webp', 0.9);
       if (!dataUrl || !dataUrl.startsWith('data:image/webp')) {
-        dataUrl = c.toDataURL('image/jpeg', 0.9);
+        dataUrl = c.toDataURL('image/jpeg', 0.92);
       }
       applyPhotoToProfileField(dataUrl);
     };

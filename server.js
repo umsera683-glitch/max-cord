@@ -78,8 +78,8 @@ const io = new Server(server, {
     },
     methods: ['GET', 'POST']
   },
-  // SDP/ICE + fotos/GIF de perfil em data URL (até ~1.5MB)
-  maxHttpBufferSize: 3e6
+  // SDP/ICE + fotos/GIF de perfil em data URL (até ~5MB)
+  maxHttpBufferSize: 6e6
 });
 
 // ==================== MIDDLEWARES DE SEGURANÇA ====================
@@ -155,8 +155,8 @@ function sanitizeStr(val, maxLen) {
   return val.trim().slice(0, maxLen || 100).replace(/[<>]/g, '');
 }
 
-/** Tamanho máx. de data URL de foto/GIF (~1.5MB base64 ≈ arquivo ~1.1MB). */
-const MAX_PHOTO_DATA_LEN = 1500000;
+/** Tamanho máx. de data URL de foto/GIF (~5MB base64 ≈ arquivo ~3.7MB). */
+const MAX_PHOTO_DATA_LEN = 5 * 1024 * 1024;
 
 /** Foto/GIF de perfil: data URL (png/jpg/gif/webp) ou https. */
 function sanitizePhotoUrl(val) {
@@ -164,7 +164,7 @@ function sanitizePhotoUrl(val) {
   const s = val.trim();
   if (!s) return '';
   if (/^data:image\/(png|jpe?g|gif|webp|bmp);base64,/i.test(s)) {
-    if (s.length > MAX_PHOTO_DATA_LEN) return s.slice(0, MAX_PHOTO_DATA_LEN);
+    if (s.length > MAX_PHOTO_DATA_LEN) return '';
     return s;
   }
   // URL http(s) — Tenor/Giphy/Imgur e outros CDNs
@@ -397,10 +397,18 @@ function releaseActiveName(socketId) {
 function isNameTaken(userName, exceptSocketId) {
   const key = (userName || '').trim().toLowerCase();
   if (!key) return false;
-  // Só bloqueia se outro socket ONLINE já estiver com esse nome.
-  // Conta offline com o mesmo nome pode ser retomada (atualiza o registro).
+  // Só bloqueia se outro socket ONLINE já estiver com esse nome de PERFIL.
+  // Nome de sala NUNCA entra aqui — salas e perfis são independentes.
   const ownerSid = activeNames.get(key);
-  return !!(ownerSid && ownerSid !== exceptSocketId);
+  if (!ownerSid || ownerSid === exceptSocketId) return false;
+  const sock = io.sockets.sockets.get(ownerSid);
+  // Socket fantasma / desconectado: libera o nome
+  if (!sock || !sock.connected) {
+    activeNames.delete(key);
+    socketToAccount.delete(ownerSid);
+    return false;
+  }
+  return true;
 }
 
 function listAccountsSnapshot(searchQuery) {
@@ -668,11 +676,18 @@ io.on('connection', (socket) => {
     const photoUrl = sanitizePhotoUrl((data || {}).photoUrl || '');
     const termsAccepted = !!(data || {}).termsAccepted;
 
-    if (!userName)           return callback({ success: false, message: 'Nome inválido.' });
+    if (!userName)           return callback({ success: false, message: 'Nome de perfil inválido. Configure seu apelido no perfil.' });
     if (!isValidRoomId(roomId)) return callback({ success: false, message: 'ID de sala inválido.' });
-    if (rooms.has(roomId))   return callback({ success: false, message: 'Já existe uma sala com este ID.' });
-    if (isNameTaken(userName, socket.id)) {
-      return callback({ success: false, message: 'Este nome de perfil já está em uso. Escolha outro.' });
+    if (rooms.has(roomId))   return callback({ success: false, message: 'Já existe uma sala com este ID. Gere outro ID.' });
+    // Nome da SALA é livre (pode repetir e não conflita com perfil).
+    // Só o apelido (perfil) precisa ser único entre quem está online.
+    const alreadyMine = socket.userName &&
+      String(socket.userName).trim().toLowerCase() === userName.trim().toLowerCase();
+    if (!alreadyMine && isNameTaken(userName, socket.id)) {
+      return callback({
+        success: false,
+        message: 'Seu apelido de perfil já está em uso por outra pessoa online. Troque o apelido no perfil — o nome da sala é livre.'
+      });
     }
 
     const admin = isAdminName(userName);
@@ -731,9 +746,14 @@ io.on('connection', (socket) => {
     const photoUrl = sanitizePhotoUrl((data || {}).photoUrl || '');
     const termsAccepted = !!(data || {}).termsAccepted;
 
-    if (!userName) return callback({ success: false, message: 'Nome inválido.' });
-    if (isNameTaken(userName, socket.id)) {
-      return callback({ success: false, message: 'Este nome de perfil já está em uso. Escolha outro.' });
+    if (!userName) return callback({ success: false, message: 'Nome de perfil inválido. Configure seu apelido no perfil.' });
+    const alreadyMineJoin = socket.userName &&
+      String(socket.userName).trim().toLowerCase() === userName.trim().toLowerCase();
+    if (!alreadyMineJoin && isNameTaken(userName, socket.id)) {
+      return callback({
+        success: false,
+        message: 'Seu apelido de perfil já está em uso por outra pessoa online. Troque o apelido no perfil.'
+      });
     }
 
     const room = rooms.get(roomId);
@@ -957,9 +977,9 @@ io.on('connection', (socket) => {
   socket.on('check-name', (data, callback) => {
     if (typeof callback !== 'function') return;
     const userName = sanitizeStr((data || {}).userName, 20);
-    if (!userName) return callback({ available: false, message: 'Nome inválido.' });
+    if (!userName) return callback({ available: false, message: 'Nome de perfil inválido.' });
     if (isNameTaken(userName, socket.id)) {
-      return callback({ available: false, message: 'Este nome de perfil já está em uso.' });
+      return callback({ available: false, message: 'Este apelido de perfil já está em uso por outra pessoa online.' });
     }
     callback({
       available: true,
