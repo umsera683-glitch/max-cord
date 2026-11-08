@@ -78,8 +78,8 @@ const io = new Server(server, {
     },
     methods: ['GET', 'POST']
   },
-  // SDP/ICE cabem com folga; fotos de perfil grandes são recusadas no cliente
-  maxHttpBufferSize: 2.5e6
+  // SDP/ICE + fotos/GIF de perfil em data URL (até ~1.5MB)
+  maxHttpBufferSize: 3e6
 });
 
 // ==================== MIDDLEWARES DE SEGURANÇA ====================
@@ -155,18 +155,21 @@ function sanitizeStr(val, maxLen) {
   return val.trim().slice(0, maxLen || 100).replace(/[<>]/g, '');
 }
 
-/** Foto/GIF de perfil: permite data URL ou https (limite maior que texto). */
+/** Tamanho máx. de data URL de foto/GIF (~1.5MB base64 ≈ arquivo ~1.1MB). */
+const MAX_PHOTO_DATA_LEN = 1500000;
+
+/** Foto/GIF de perfil: data URL (png/jpg/gif/webp) ou https. */
 function sanitizePhotoUrl(val) {
   if (typeof val !== 'string') return '';
   const s = val.trim();
   if (!s) return '';
-  // data:image (jpg/png/gif/webp) — até ~900KB em base64
-  if (/^data:image\/(png|jpe?g|gif|webp);base64,/i.test(s)) {
-    return s.slice(0, 1200000);
+  if (/^data:image\/(png|jpe?g|gif|webp|bmp);base64,/i.test(s)) {
+    if (s.length > MAX_PHOTO_DATA_LEN) return s.slice(0, MAX_PHOTO_DATA_LEN);
+    return s;
   }
-  // URL http(s) — Tenor/Giphy podem ser longas
+  // URL http(s) — Tenor/Giphy/Imgur e outros CDNs
   if (/^https?:\/\//i.test(s)) {
-    return s.slice(0, 4000).replace(/[<>"']/g, '');
+    return s.slice(0, 8000).replace(/[<>"']/g, '');
   }
   return '';
 }
@@ -262,7 +265,7 @@ function loadAccountsFromDisk() {
         id: String(acc.id),
         name: String(acc.name).slice(0, 20),
         nameKey: String(acc.name).trim().toLowerCase(),
-        photoUrl: typeof acc.photoUrl === 'string' ? acc.photoUrl.slice(0, 4000) : '',
+        photoUrl: sanitizePhotoUrl(typeof acc.photoUrl === 'string' ? acc.photoUrl : ''),
         isAdmin: !!acc.isAdmin || isAdminName(acc.name),
         createdAt: acc.createdAt || Date.now(),
         lastSeen: acc.lastSeen || acc.createdAt || Date.now()
@@ -1334,6 +1337,28 @@ io.on('connection', (socket) => {
 
     // Enviar para todos na sala (incluindo o remetente)
     io.to(socket.roomId).emit('chat-message', msg);
+  });
+
+  // ---------- Foto de perfil: repassa para a sala (GIF/imagem para todos) ----------
+  socket.on('photo-share', (data) => {
+    const room = rooms.get(socket.roomId);
+    if (!room || !room.participants.has(socket.id)) return;
+    const photoUrl = sanitizePhotoUrl((data || {}).photoUrl || '');
+    if (!photoUrl) return;
+    const p = room.participants.get(socket.id);
+    if (p) p.photoUrl = photoUrl;
+    socket.photoUrl = photoUrl;
+    const acc = findAccountBySocket(socket.id);
+    if (acc) {
+      acc.photoUrl = photoUrl;
+      acc.lastSeen = Date.now();
+      scheduleSaveAccounts();
+    }
+    // Envia para os outros na sala (não ecoa de volta)
+    socket.to(socket.roomId).emit('photo-share', {
+      id: socket.id,
+      photoUrl
+    });
   });
 
   // ---------- Sinalização WebRTC ----------

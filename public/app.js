@@ -193,12 +193,14 @@ function sanitizeUserText(val, maxLen) {
   return s;
 }
 
+const MAX_PHOTO_DATA_LEN = 1500000;
+
 function isSafePhotoUrl(url) {
   if (typeof url !== 'string') return false;
   const s = url.trim();
   if (!s) return false;
-  if (/^data:image\/(png|jpe?g|gif|webp);base64,[A-Za-z0-9+/=]+$/i.test(s) && s.length <= 1200000) return true;
-  if (/^https:\/\//i.test(s) && s.length <= 4000 && !/[\s<>"']/g.test(s)) return true;
+  if (/^data:image\/(png|jpe?g|gif|webp|bmp);base64,[A-Za-z0-9+/=]+$/i.test(s) && s.length <= MAX_PHOTO_DATA_LEN) return true;
+  if (/^https?:\/\//i.test(s) && s.length <= 8000 && !/[\s<>"']/g.test(s)) return true;
   return false;
 }
 
@@ -254,6 +256,8 @@ function clearLocalProfileData() {
   try {
     sessionStorage.removeItem('mc_closed_anns');
   } catch (_) {}
+  _photoMemory = '';
+  try { idbSetPhoto(''); } catch (_) {}
   window.__mcIsAdmin = false;
   window.__mcUserId = null;
   myName = '';
@@ -426,37 +430,111 @@ function updateProfileTermsBadge() {
   else badge.classList.add('hidden');
 }
 
-// Foto em memória (fallback quando localStorage estoura quota)
+// Foto em memória + IndexedDB (localStorage estoura com GIF/data URL grande)
 let _photoMemory = '';
+const PHOTO_IDB_NAME = 'maxcord_profile';
+const PHOTO_IDB_STORE = 'photos';
+const PHOTO_IDB_KEY = 'avatar';
+
+function idbOpen() {
+  return new Promise((resolve, reject) => {
+    if (!window.indexedDB) return reject(new Error('no idb'));
+    const req = indexedDB.open(PHOTO_IDB_NAME, 1);
+    req.onupgradeneeded = () => {
+      const db = req.result;
+      if (!db.objectStoreNames.contains(PHOTO_IDB_STORE)) {
+        db.createObjectStore(PHOTO_IDB_STORE);
+      }
+    };
+    req.onsuccess = () => resolve(req.result);
+    req.onerror = () => reject(req.error || new Error('idb open fail'));
+  });
+}
+
+function idbSetPhoto(url) {
+  return idbOpen().then(db => new Promise((resolve, reject) => {
+    try {
+      const tx = db.transaction(PHOTO_IDB_STORE, 'readwrite');
+      const store = tx.objectStore(PHOTO_IDB_STORE);
+      if (url) store.put(url, PHOTO_IDB_KEY);
+      else store.delete(PHOTO_IDB_KEY);
+      tx.oncomplete = () => { try { db.close(); } catch (_) {} resolve(true); };
+      tx.onerror = () => { try { db.close(); } catch (_) {} reject(tx.error); };
+    } catch (e) { reject(e); }
+  })).catch(() => false);
+}
+
+function idbGetPhoto() {
+  return idbOpen().then(db => new Promise((resolve) => {
+    try {
+      const tx = db.transaction(PHOTO_IDB_STORE, 'readonly');
+      const req = tx.objectStore(PHOTO_IDB_STORE).get(PHOTO_IDB_KEY);
+      req.onsuccess = () => {
+        try { db.close(); } catch (_) {}
+        resolve(typeof req.result === 'string' ? req.result : '');
+      };
+      req.onerror = () => { try { db.close(); } catch (_) {} resolve(''); };
+    } catch (_) { resolve(''); }
+  })).catch(() => '');
+}
 
 function savePhoto(url) {
   let u = url || '';
   if (u && !isSafePhotoUrl(u)) u = '';
   _photoMemory = u;
+  // URLs curtas no localStorage; data URLs (GIF/imagem) no IndexedDB
   try {
-    if (u) localStorage.setItem('sh_photo', u);
-    else localStorage.removeItem('sh_photo');
-  } catch (err) {
-    // Quota cheia: mantém só em memória nesta sessão
-    try {
-      if (u && u.length < 4000 && /^https:\/\//i.test(u)) {
-        localStorage.setItem('sh_photo', u);
-      } else {
-        // não remove se já tinha URL curta; só avisa se for data grande
-        if (u.startsWith('data:') && u.length > 50000) {
-          showToast('Foto grande: funciona nesta sessão. Para guardar, use link do Tenor/Giphy.', 'info');
-        }
-      }
-    } catch (_) {}
+    if (u && /^https?:\/\//i.test(u) && u.length <= 8000) {
+      localStorage.setItem('sh_photo', u);
+      idbSetPhoto(''); // limpa data antiga
+    } else if (u && u.startsWith('data:')) {
+      try { localStorage.removeItem('sh_photo'); } catch (_) {}
+      idbSetPhoto(u);
+    } else if (!u) {
+      try { localStorage.removeItem('sh_photo'); } catch (_) {}
+      idbSetPhoto('');
+    } else {
+      try { localStorage.setItem('sh_photo', u); } catch (_) {}
+      idbSetPhoto(u);
+    }
+  } catch (_) {
+    idbSetPhoto(u);
   }
 }
+
 function loadPhoto() {
+  if (_photoMemory && isSafePhotoUrl(_photoMemory)) return _photoMemory;
   try {
     const stored = localStorage.getItem('sh_photo') || '';
     if (stored && isSafePhotoUrl(stored)) return stored;
   } catch (_) {}
-  if (_photoMemory && isSafePhotoUrl(_photoMemory)) return _photoMemory;
   return '';
+}
+
+/** Carrega foto do IndexedDB para memória (chamar no boot). */
+async function hydratePhotoFromIdb() {
+  if (_photoMemory && isSafePhotoUrl(_photoMemory)) return _photoMemory;
+  try {
+    const stored = localStorage.getItem('sh_photo') || '';
+    if (stored && isSafePhotoUrl(stored)) {
+      _photoMemory = stored;
+      return stored;
+    }
+  } catch (_) {}
+  const fromIdb = await idbGetPhoto();
+  if (fromIdb && isSafePhotoUrl(fromIdb)) {
+    _photoMemory = fromIdb;
+    return fromIdb;
+  }
+  return '';
+}
+
+/** Envia a foto atual para todos na sala verem o perfil. */
+function broadcastMyPhoto() {
+  if (!socket || !socket.connected || !currentRoomId) return;
+  const photo = loadPhoto();
+  if (!photo || !isSafePhotoUrl(photo)) return;
+  socket.emit('photo-share', { photoUrl: photo });
 }
 
 // ==================== SOCKET ====================
@@ -510,6 +588,8 @@ function setupSocketListeners() {
       isAdmin: !!data.isAdmin,
       userId: data.userId || null
     });
+    // Garante que o novo usuário receba minha foto (GIF/imagem)
+    setTimeout(() => broadcastMyPhoto(), 200);
     updateParticipantCount();
     renderParticipantsList();
     showToast(`${data.name} entrou na sala`, 'info');
@@ -652,9 +732,12 @@ function setupSocketListeners() {
 
   // Receber foto de perfil de outro participante (enviada diretamente, não via servidor)
   socket.on('photo-share', (data) => {
+    if (!data || !data.id) return;
+    const url = (data.photoUrl || '').trim();
+    if (!url || !isSafePhotoUrl(url)) return;
     const p = participants.get(data.id);
-    if (p && data.photoUrl) {
-      p.photoUrl = data.photoUrl;
+    if (p) {
+      p.photoUrl = url;
       renderParticipantsList();
     }
   });
@@ -2115,6 +2198,9 @@ function enterRoom(roomId, rName, owner) {
     socket.emit('request-peer', { targetId: pid });
   }
 
+  // Envia foto do perfil (GIF/imagem) para todos na sala
+  setTimeout(() => broadcastMyPhoto(), 300);
+
   showToast(`Você entrou em ${rName || roomId}`, 'success');
 }
 
@@ -2675,6 +2761,8 @@ async function saveProfile() {
   if (photoEl) photoEl.value = photo;
   saveName(name);
   savePhoto(photo);
+  // Propaga foto/GIF para quem já está na sala
+  broadcastMyPhoto();
   // Só vincula o nome ao aceite já existente — NUNCA altera a data de aceite
   bindTermsMetaName(name);
 
@@ -2813,36 +2901,64 @@ function acceptPrivacyFromModal() {
   showToast('Termos aceitos e salvos no seu perfil', 'success');
 }
 
+function applyPhotoToProfileField(dataUrl, opts) {
+  opts = opts || {};
+  if (!dataUrl || !isSafePhotoUrl(dataUrl)) {
+    if (dataUrl && dataUrl.startsWith('data:') && dataUrl.length > MAX_PHOTO_DATA_LEN) {
+      showToast('Arquivo muito grande para o perfil. Use um GIF/imagem menor (até ~1MB) ou cole um link https.', 'error');
+    } else {
+      showToast('Imagem inválida', 'error');
+    }
+    return false;
+  }
+  const photoEl = document.getElementById('profile-photo-url');
+  if (photoEl) photoEl.value = dataUrl;
+  savePhoto(dataUrl);
+  updateAvatarPreview();
+  broadcastMyPhoto();
+  if (!opts.silent) showToast('Foto do perfil atualizada — todos na sala verão', 'success');
+  return true;
+}
+
 function handlePhotoUpload(file) {
   if (!file) return;
-  // Limite generoso: 8MB. Acima disso, oriente a usar URL.
-  if (file.size > 8 * 1024 * 1024) {
-    showToast('Arquivo acima de 8MB. Cole um link do Tenor/Giphy ou use uma imagem menor.', 'error');
+  if (!file.type || !file.type.startsWith('image/')) {
+    showToast('Selecione uma imagem ou GIF', 'error');
+    return;
+  }
+  // Limite de arquivo: 5MB (data URL fica ~33% maior)
+  if (file.size > 5 * 1024 * 1024) {
+    showToast('Arquivo acima de 5MB. Use uma imagem/GIF menor ou cole um link https (Tenor, Giphy, Imgur…).', 'error');
     return;
   }
   const isGif = /image\/gif/i.test(file.type) || /\.gif$/i.test(file.name);
-  // GIF: mantém animação. Até ~1.5MB cabe bem no socket; acima disso ainda funciona na sessão.
+
   if (isGif) {
+    // GIF: mantém animação intacta (não passa por canvas)
     const reader = new FileReader();
     reader.onload = (e) => {
       const dataUrl = e.target.result;
-      const photoEl = document.getElementById('profile-photo-url');
-      if (photoEl) photoEl.value = dataUrl;
-      updateAvatarPreview();
-      if (file.size > 1.5 * 1024 * 1024) {
-        showToast('GIF grande: ok nesta sessão. Para guardar permanentemente, use link Tenor/Giphy.', 'info');
+      if (typeof dataUrl !== 'string') {
+        showToast('Não foi possível ler o GIF', 'error');
+        return;
       }
+      if (dataUrl.length > MAX_PHOTO_DATA_LEN) {
+        showToast('GIF muito grande. Comprima o arquivo (até ~1MB) ou use um link do Tenor/Giphy.', 'error');
+        return;
+      }
+      applyPhotoToProfileField(dataUrl);
     };
     reader.onerror = () => showToast('Não foi possível ler o GIF', 'error');
     reader.readAsDataURL(file);
     return;
   }
-  // Imagem estática: redimensiona e comprime (melhor qualidade, até 256px)
+
+  // Imagem estática: redimensiona e comprime (até 320px, boa qualidade)
   const reader = new FileReader();
   reader.onload = (e) => {
     const img = new Image();
     img.onload = () => {
-      const max = 256;
+      const max = 320;
       let w = img.width, h = img.height;
       if (w > max || h > max) {
         if (w > h) { h = Math.round(h * max / w); w = max; }
@@ -2854,14 +2970,11 @@ function handlePhotoUpload(file) {
       ctx.imageSmoothingEnabled = true;
       ctx.imageSmoothingQuality = 'high';
       ctx.drawImage(img, 0, 0, w, h);
-      // tenta webp; se não, jpeg de boa qualidade
-      let dataUrl = c.toDataURL('image/webp', 0.85);
-      if (!dataUrl.startsWith('data:image/webp')) {
-        dataUrl = c.toDataURL('image/jpeg', 0.88);
+      let dataUrl = c.toDataURL('image/webp', 0.88);
+      if (!dataUrl || !dataUrl.startsWith('data:image/webp')) {
+        dataUrl = c.toDataURL('image/jpeg', 0.9);
       }
-      const photoEl = document.getElementById('profile-photo-url');
-      if (photoEl) photoEl.value = dataUrl;
-      updateAvatarPreview();
+      applyPhotoToProfileField(dataUrl);
     };
     img.onerror = () => showToast('Não foi possível ler a imagem', 'error');
     img.src = e.target.result;
@@ -4142,6 +4255,15 @@ function setupAdminUI() {
   if (wiped) {
     console.info('[MaxCord] Contas resetadas — crie o perfil novamente.');
   }
+
+  // Restaura GIF/foto grande do IndexedDB (não cabe no localStorage)
+  hydratePhotoFromIdb().then((photo) => {
+    if (!photo) return;
+    const photoEl = document.getElementById('profile-photo-url');
+    if (photoEl && !photoEl.value) photoEl.value = photo;
+    try { showProfileView(); } catch (_) {}
+    try { updateAvatarPreview(); } catch (_) {}
+  }).catch(() => {});
 
   // Restaurar qualidade salva
   try {
