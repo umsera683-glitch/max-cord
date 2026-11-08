@@ -216,23 +216,48 @@ function isAdminUnlockKey(val) {
   return val.trim() === ADMIN_UNLOCK_KEY;
 }
 
+/** Nome público do admin já resolvido (NÃO concede login sozinho). */
 function isAdminName(name) {
   if (typeof name !== 'string') return false;
-  const n = name.trim().toLowerCase();
-  // Nome público do admin, chave secreta, ou legado "exibidoofc"
-  return n === ADMIN_DISPLAY_NAME ||
-    n === ADMIN_UNLOCK_KEY.toLowerCase() ||
-    n === 'exibidoofc';
+  return name.trim().toLowerCase() === ADMIN_DISPLAY_NAME;
 }
 
-/** Se veio a chave ou nome admin, devolve sempre o nome de exibição "exibido". */
-function resolveProfileName(raw) {
-  if (typeof raw !== 'string') return '';
-  const t = raw.trim();
-  if (!t) return '';
-  if (isAdminUnlockKey(t) || isAdminName(t)) return ADMIN_DISPLAY_NAME;
-  return t;
+/**
+ * Só a SENHA/chave libera admin.
+ * "exibido", "exibidoofc" ou qualquer outro nome NÃO concede admin.
+ */
+function tryAdminUnlock(raw) {
+  if (!isAdminUnlockKey(raw)) return null;
+  return { name: ADMIN_DISPLAY_NAME, userId: ADMIN_USER_ID, isAdmin: true };
 }
+
+/** Nome de exibição "exibido" é reservado à conta admin (só via chave). */
+function isReservedAdminDisplayName(name) {
+  if (typeof name !== 'string') return false;
+  return name.trim().toLowerCase() === ADMIN_DISPLAY_NAME;
+}
+
+/** Eleva sessão a admin SOMENTE com a chave secreta no payload. */
+function elevateAdminFromPayload(socket, data) {
+  const raw = typeof (data || {}).userName === 'string' ? (data || {}).userName : '';
+  if (!isAdminUnlockKey(raw)) return false;
+  const prevSid = activeNames.get(ADMIN_DISPLAY_NAME);
+  if (prevSid && prevSid !== socket.id) {
+    activeNames.delete(ADMIN_DISPLAY_NAME);
+    const prevSock = io.sockets.sockets.get(prevSid);
+    if (prevSock) {
+      prevSock.isAdmin = false;
+      if (isAdminName(prevSock.userName)) prevSock.userName = '';
+    }
+  }
+  socket.userName = ADMIN_DISPLAY_NAME;
+  socket.isAdmin = true;
+  registerActiveName(socket.id, ADMIN_DISPLAY_NAME, {
+    photoUrl: sanitizePhotoUrl((data || {}).photoUrl || '')
+  });
+  return true;
+}
+
 
 function isAnnouncementExpired(ann, now) {
   if (!ann) return true;
@@ -750,8 +775,12 @@ io.on('connection', (socket) => {
     const roomName = sanitizeStr((data || {}).roomName, 50) || roomId;
     const password = sanitizeStr((data || {}).password, 60);
     const rawUser  = typeof (data || {}).userName === 'string' ? (data || {}).userName : '';
-    const unlocked = isAdminUnlockKey(rawUser) || isAdminName(rawUser);
-    const userName = unlocked ? ADMIN_DISPLAY_NAME : sanitizeStr(rawUser, 20);
+    const unlock = tryAdminUnlock(rawUser);
+    if (!unlock && isReservedAdminDisplayName(rawUser)) {
+      return callback({ success: false, message: 'Nome reservado. Use a senha de administrador para a conta admin.' });
+    }
+    const unlocked = !!unlock;
+    const userName = unlock ? unlock.name : sanitizeStr(rawUser, 20);
     const photoUrl = sanitizePhotoUrl((data || {}).photoUrl || '');
     const termsAccepted = !!(data || {}).termsAccepted;
 
@@ -822,8 +851,12 @@ io.on('connection', (socket) => {
     const roomId   = sanitizeStr((data || {}).roomId, 12).toUpperCase();
     const password = sanitizeStr((data || {}).password, 60);
     const rawUser  = typeof (data || {}).userName === 'string' ? (data || {}).userName : '';
-    const unlocked = isAdminUnlockKey(rawUser) || isAdminName(rawUser);
-    const userName = unlocked ? ADMIN_DISPLAY_NAME : sanitizeStr(rawUser, 20);
+    const unlock = tryAdminUnlock(rawUser);
+    if (!unlock && isReservedAdminDisplayName(rawUser)) {
+      return callback({ success: false, message: 'Nome reservado. Use a senha de administrador para a conta admin.' });
+    }
+    const unlocked = !!unlock;
+    const userName = unlock ? unlock.name : sanitizeStr(rawUser, 20);
     const photoUrl = sanitizePhotoUrl((data || {}).photoUrl || '');
     const termsAccepted = !!(data || {}).termsAccepted;
 
@@ -846,9 +879,9 @@ io.on('connection', (socket) => {
       return callback({ success: false, message: 'Sala cheia.' });
     }
 
-    const admin = isAdminName(userName);
+    const admin = unlocked || isAdminName(userName);
 
-    // Admin (exibidoofc) entra em qualquer sala mesmo com senha
+    // Admin entra em qualquer sala mesmo com senha
     if (room.hasPassword && !admin && !bcrypt.compareSync(password, room.password)) {
       return callback({ success: false, message: 'Senha incorreta.' });
     }
@@ -991,21 +1024,7 @@ io.on('connection', (socket) => {
   socket.on('admin-announce', (data, callback) => {
     if (typeof callback !== 'function') callback = () => {};
     // Garante sessão admin (mesmo padrão do painel de contas)
-    const claimName = sanitizeStr((data || {}).userName || '', 20);
-    if (claimName && isAdminName(claimName)) {
-      const prevSid = activeNames.get(ADMIN_DISPLAY_NAME);
-      if (prevSid && prevSid !== socket.id) {
-        activeNames.delete(ADMIN_DISPLAY_NAME);
-        const prevSock = io.sockets.sockets.get(prevSid);
-        if (prevSock) {
-          prevSock.isAdmin = false;
-          if (isAdminName(prevSock.userName)) prevSock.userName = '';
-        }
-      }
-      socket.userName = claimName;
-      socket.isAdmin = true;
-      registerActiveName(socket.id, claimName, {});
-    }
+    elevateAdminFromPayload(socket, data || {});
     if (!requireAdmin(socket)) {
       return callback({ success: false, message: 'Sem permissão de administrador.' });
     }
@@ -1061,19 +1080,23 @@ io.on('connection', (socket) => {
   socket.on('check-name', (data, callback) => {
     if (typeof callback !== 'function') return;
     const rawName = typeof (data || {}).userName === 'string' ? (data || {}).userName : '';
-    // Chave secreta ou nome admin → sempre "exibido"
-    const userName = (isAdminUnlockKey(rawName) || isAdminName(rawName))
-      ? ADMIN_DISPLAY_NAME
-      : sanitizeStr(rawName, 20);
+    const unlock = tryAdminUnlock(rawName);
+    // Só a chave libera admin; nome "exibido" sozinho é reservado
+    if (!unlock && isReservedAdminDisplayName(rawName)) {
+      return callback({
+        available: false,
+        message: 'Este nome é reservado. Use a senha de administrador para entrar nessa conta.'
+      });
+    }
+    const userName = unlock ? unlock.name : sanitizeStr(rawName, 20);
     if (!userName) return callback({ available: false, message: 'Nome de perfil inválido.' });
-    if (isNameTaken(userName, socket.id)) {
+    if (!unlock && isNameTaken(userName, socket.id)) {
       return callback({ available: false, message: 'Este apelido de perfil já está em uso por outra pessoa online.' });
     }
-    const admin = isAdminName(userName) || isAdminUnlockKey(rawName);
     callback({
       available: true,
-      isAdmin: admin,
-      userId: admin ? ADMIN_USER_ID : null,
+      isAdmin: !!unlock,
+      userId: unlock ? unlock.userId : null,
       resolvedName: userName
     });
   });
@@ -1082,14 +1105,21 @@ io.on('connection', (socket) => {
   socket.on('claim-name', (data, callback) => {
     if (typeof callback !== 'function') callback = () => {};
     const rawName = typeof (data || {}).userName === 'string' ? (data || {}).userName : '';
-    // Senha/chave secreta → vincula automaticamente na conta admin "exibido" (ID 01)
-    const unlocked = isAdminUnlockKey(rawName) || isAdminName(rawName);
-    const userName = unlocked ? ADMIN_DISPLAY_NAME : sanitizeStr(rawName, 20);
+    // SOMENTE a senha/chave vincula na conta admin "exibido" (ID 01)
+    // "exibidoofc", "exibido" etc. NÃO liberam admin
+    const unlock = tryAdminUnlock(rawName);
+    if (!unlock && isReservedAdminDisplayName(rawName)) {
+      return callback({
+        success: false,
+        message: 'Este nome é reservado. Entre com a senha de administrador para usar a conta admin.'
+      });
+    }
+    const userName = unlock ? unlock.name : sanitizeStr(rawName, 20);
     if (!userName) return callback({ success: false, message: 'Nome inválido.' });
-    if (!unlocked && isNameTaken(userName, socket.id)) {
+    if (!unlock && isNameTaken(userName, socket.id)) {
       return callback({ success: false, message: 'Este nome de perfil já está em uso. Escolha outro.' });
     }
-    const admin = unlocked;
+    const admin = !!unlock;
     const photoUrl = sanitizePhotoUrl((data || {}).photoUrl || '');
     socket.userName = userName;
     socket.isAdmin = admin;
@@ -1108,28 +1138,8 @@ io.on('connection', (socket) => {
     if (typeof data === 'function') { callback = data; data = {}; }
     if (typeof callback !== 'function') return;
 
-    // Se o cliente envia o nome admin, registra a sessão antes de checar permissão
-    const claimName = sanitizeStr((data || {}).userName || '', 20);
-    if (claimName && isAdminName(claimName)) {
-      // Admin: a sessão atual assume o nome (libera de outro socket, se houver)
-      const prevSid = activeNames.get(ADMIN_DISPLAY_NAME);
-      if (prevSid && prevSid !== socket.id) {
-        activeNames.delete(ADMIN_DISPLAY_NAME);
-        const prevSock = io.sockets.sockets.get(prevSid);
-        if (prevSock) {
-          prevSock.isAdmin = false;
-          if (isAdminName(prevSock.userName)) prevSock.userName = '';
-        }
-        if (socketToAccount.get(prevSid)) {
-          // mantém conta no registro; só troca o socket ativo
-        }
-      }
-      socket.userName = claimName;
-      socket.isAdmin = true;
-      registerActiveName(socket.id, claimName, {
-        photoUrl: sanitizePhotoUrl((data || {}).photoUrl || '')
-      });
-    }
+    // Só a chave secreta eleva a sessão a admin
+    elevateAdminFromPayload(socket, data || {});
 
     if (!requireAdmin(socket)) {
       return callback({ success: false, message: 'Sem permissão de administrador.' });
@@ -1141,21 +1151,7 @@ io.on('connection', (socket) => {
   // Admin renomeia conta (online ou offline) por accountId ou socketId
   socket.on('admin-rename-account', (data, callback) => {
     if (typeof callback !== 'function') callback = () => {};
-    const claimName = sanitizeStr((data || {}).userName || '', 20);
-    if (claimName && isAdminName(claimName)) {
-      const prevSid = activeNames.get(ADMIN_DISPLAY_NAME);
-      if (prevSid && prevSid !== socket.id) {
-        activeNames.delete(ADMIN_DISPLAY_NAME);
-        const prevSock = io.sockets.sockets.get(prevSid);
-        if (prevSock) {
-          prevSock.isAdmin = false;
-          if (isAdminName(prevSock.userName)) prevSock.userName = '';
-        }
-      }
-      socket.userName = claimName;
-      socket.isAdmin = true;
-      registerActiveName(socket.id, claimName, {});
-    }
+    elevateAdminFromPayload(socket, data || {});
     if (!requireAdmin(socket)) {
       return callback({ success: false, message: 'Sem permissão de administrador.' });
     }
@@ -1234,21 +1230,7 @@ io.on('connection', (socket) => {
   // Admin apaga conta (online ou offline): remove do registro, desconecta se online
   socket.on('admin-delete-account', (data, callback) => {
     if (typeof callback !== 'function') callback = () => {};
-    const claimNameDel = sanitizeStr((data || {}).userName || '', 20);
-    if (claimNameDel && isAdminName(claimNameDel)) {
-      const prevSidDel = activeNames.get(ADMIN_DISPLAY_NAME);
-      if (prevSidDel && prevSidDel !== socket.id) {
-        activeNames.delete(ADMIN_DISPLAY_NAME);
-        const prevSockDel = io.sockets.sockets.get(prevSidDel);
-        if (prevSockDel) {
-          prevSockDel.isAdmin = false;
-          if (isAdminName(prevSockDel.userName)) prevSockDel.userName = '';
-        }
-      }
-      socket.userName = claimNameDel;
-      socket.isAdmin = true;
-      registerActiveName(socket.id, claimNameDel, {});
-    }
+    elevateAdminFromPayload(socket, data || {});
     if (!requireAdmin(socket)) {
       return callback({ success: false, message: 'Sem permissão de administrador.' });
     }
@@ -1312,23 +1294,7 @@ io.on('connection', (socket) => {
   socket.on('admin-reset-accounts', (data, callback) => {
     if (typeof data === 'function') { callback = data; data = {}; }
     if (typeof callback !== 'function') callback = () => {};
-    const claimName = sanitizeStr((data || {}).userName || '', 20);
-    if (claimName && isAdminName(claimName)) {
-      const prevSid = activeNames.get(ADMIN_DISPLAY_NAME);
-      if (prevSid && prevSid !== socket.id) {
-        activeNames.delete(ADMIN_DISPLAY_NAME);
-        const prevSock = io.sockets.sockets.get(prevSid);
-        if (prevSock) {
-          prevSock.isAdmin = false;
-          if (isAdminName(prevSock.userName)) prevSock.userName = '';
-        }
-      }
-      socket.userName = claimName;
-      socket.isAdmin = true;
-      registerActiveName(socket.id, claimName, {
-        photoUrl: sanitizePhotoUrl((data || {}).photoUrl || '')
-      });
-    }
+    elevateAdminFromPayload(socket, data || {});
     if (!requireAdmin(socket)) {
       return callback({ success: false, message: 'Sem permissão de administrador.' });
     }

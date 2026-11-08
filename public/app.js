@@ -203,20 +203,41 @@ function isAdminUnlockKey(val) {
   return typeof val === 'string' && val.trim() === ADMIN_UNLOCK_KEY;
 }
 
-function isAdminProfileName(val) {
-  if (typeof val !== 'string') return false;
-  const n = val.trim().toLowerCase();
-  return n === ADMIN_DISPLAY_NAME ||
-    n === ADMIN_UNLOCK_KEY.toLowerCase() ||
-    n === 'exibidoofc';
+/** Payload de autenticação admin: sempre a chave, nunca só o nome. */
+function adminAuthUserName() {
+  return ADMIN_UNLOCK_KEY;
 }
 
-/** Se digitou a chave ou nome admin, resolve para "exibido". */
+/** Só a chave secreta libera admin — "exibidoofc" / "exibido" sozinhos NÃO. */
+function isAdminUnlockInput(val) {
+  return isAdminUnlockKey(val);
+}
+
+/** Nome público já resolvido do admin (exibido). Não concede login. */
+function isAdminDisplayName(val) {
+  if (typeof val !== 'string') return false;
+  return val.trim().toLowerCase() === ADMIN_DISPLAY_NAME;
+}
+
+/** Perfil local é admin se desbloqueou com a chave (ID 01) ou ainda tem a chave salva. */
+function isAdminProfileName(val) {
+  if (isAdminUnlockKey(val)) return true;
+  // Nome "exibido" só conta como admin se já vinculou ID 01 nesta máquina
+  if (isAdminDisplayName(val)) {
+    try {
+      if (localStorage.getItem('mc_user_id') === '01') return true;
+      if (window.__mcIsAdmin) return true;
+    } catch (_) {}
+  }
+  return false;
+}
+
+/** Resolve input: chave → "exibido"; senão devolve o texto limpo. */
 function resolveAdminProfileName(raw) {
   if (typeof raw !== 'string') return '';
   const t0 = raw.trim();
   if (!t0) return '';
-  if (isAdminUnlockKey(t0) || isAdminProfileName(t0)) return ADMIN_DISPLAY_NAME;
+  if (isAdminUnlockKey(t0)) return ADMIN_DISPLAY_NAME;
   return t0;
 }
 
@@ -2748,7 +2769,7 @@ async function saveProfile() {
   const photoEl = document.getElementById('profile-photo-url');
   // Lê valor bruto primeiro (a chave admin é longa e não pode ser cortada em 20 chars)
   const rawInput = (nameEl && nameEl.value) ? String(nameEl.value).trim() : '';
-  const unlocked = isAdminUnlockKey(rawInput) || isAdminProfileName(rawInput);
+  const unlocked = isAdminUnlockKey(rawInput);
   // Chave secreta → vincula na conta admin "exibido" (ID 01)
   let name = unlocked ? ADMIN_DISPLAY_NAME : sanitizeUserText(rawInput, 20);
   let photo     = photoEl ? photoEl.value.trim() : '';
@@ -3846,7 +3867,12 @@ function setupMobileInstallButton() {
 // ==================== ADMIN / AVISOS FLUTUANTES ====================
 
 function isLocalAdmin() {
-  return !!window.__mcIsAdmin || isAdminProfileName(loadName());
+  // Admin só após desbloqueio com a senha (flag ou ID 01 salvo)
+  if (window.__mcIsAdmin) return true;
+  try {
+    if (localStorage.getItem('mc_user_id') === '01' && isAdminDisplayName(loadName())) return true;
+  } catch (_) {}
+  return isAdminUnlockKey((loadName() || '').trim());
 }
 
 function updateAdminUI() {
@@ -4008,7 +4034,7 @@ async function sendAdminAnnouncement() {
   }
   socket.emit('admin-announce', {
     text,
-    userName: (loadName() || '').trim()
+    userName: adminAuthUserName()
   }, (res) => {
     if (res && res.success) {
       showToast('Aviso publicado!', 'success');
@@ -4022,25 +4048,31 @@ async function sendAdminAnnouncement() {
 }
 
 async function ensureAdminSession() {
-  const name = (loadName() || '').trim();
-  if (!isAdminProfileName(name) && localStorage.getItem('mc_user_id') !== '01') return false;
+  // Só mantém sessão admin se esta máquina já desbloqueou com a chave (ID 01)
+  let isLocal = false;
+  try { isLocal = localStorage.getItem('mc_user_id') === '01' || !!window.__mcIsAdmin; } catch (_) {}
+  if (!isLocal && !isAdminUnlockKey((loadName() || '').trim())) return false;
   window.__mcIsAdmin = true;
   window.__mcUserId = '01';
   if (!(await connectSocket())) return false;
   if (!socket || !socket.connected) return false;
   await new Promise(resolve => {
-    // Sempre reivindica como "exibido" (nome público do admin)
-    socket.emit('claim-name', { userName: ADMIN_DISPLAY_NAME, photoUrl: loadPhoto() }, (res) => {
-      if (res && res.success) {
-        window.__mcIsAdmin = !!res.isAdmin || true;
+    // Reenvia a SENHA/chave — único meio de autenticar admin no servidor
+    socket.emit('claim-name', { userName: ADMIN_UNLOCK_KEY, photoUrl: loadPhoto() }, (res) => {
+      if (res && res.success && res.isAdmin) {
+        window.__mcIsAdmin = true;
         window.__mcUserId = res.userId || '01';
-        if (res.resolvedName) saveName(res.resolvedName);
+        saveName(res.resolvedName || ADMIN_DISPLAY_NAME);
+      } else {
+        window.__mcIsAdmin = false;
+        window.__mcUserId = null;
+        try { localStorage.removeItem('mc_user_id'); } catch (_) {}
       }
       resolve(res || {});
     });
     setTimeout(resolve, 2000);
   });
-  return true;
+  return !!window.__mcIsAdmin;
 }
 
 async function openAdminAccountsModal() {
@@ -4078,7 +4110,7 @@ async function refreshAdminAccountsList() {
   const userName = (loadName() || '').trim();
   socket.emit('admin-list-accounts', {
     search,
-    userName,
+    userName: adminAuthUserName(),
     photoUrl: loadPhoto()
   }, (res) => {
     if (!res || !res.success) {
@@ -4210,11 +4242,11 @@ function adminRenameAccount(acc) {
     return;
   }
   socket.emit('admin-rename-account', {
+    userName: adminAuthUserName(),
     accountId: acc.accountId || acc.userId || null,
     targetId: acc.socketId || null,
     newName: name,
-    search: getAdminAccountsSearch(),
-    userName: (loadName() || '').trim()
+    search: getAdminAccountsSearch()
   }, (res) => {
     if (res && res.success) {
       showToast('Nome atualizado', 'success');
@@ -4245,7 +4277,7 @@ async function adminResetAllAccounts() {
     return;
   }
   socket.emit('admin-reset-accounts', {
-    userName: (loadName() || '').trim(),
+    userName: adminAuthUserName(),
     photoUrl: loadPhoto(),
     clearAnnouncements: true
   }, (res) => {
@@ -4273,7 +4305,7 @@ function adminDeleteAccount(acc) {
     accountId: acc.accountId || acc.userId || null,
     targetId: acc.socketId || null,
     search: getAdminAccountsSearch(),
-    userName: (loadName() || '').trim()
+    userName: adminAuthUserName()
   }, (res) => {
     if (res && res.success) {
       showToast('Conta removida', 'success');
@@ -4365,7 +4397,7 @@ function setupAdminUI() {
   // Restaura flag admin se o perfil local for o especial
   try {
     const n = loadName();
-    if (isAdminProfileName(n) || localStorage.getItem('mc_user_id') === '01') {
+    if ((localStorage.getItem('mc_user_id') === '01' && isAdminDisplayName(n)) || isAdminUnlockKey(n)) {
       window.__mcIsAdmin = true;
       window.__mcUserId = '01';
     }
