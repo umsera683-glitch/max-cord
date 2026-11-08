@@ -194,6 +194,32 @@ function sanitizeUserText(val, maxLen) {
 }
 
 /** ~5MB em data URL (GIF/imagem). Arquivo original costuma ser ~30% menor. */
+/** Conta admin: nome público + chave secreta que vincula automaticamente. */
+const ADMIN_DISPLAY_NAME = 'exibido';
+const ADMIN_USER_ID = '01';
+const ADMIN_UNLOCK_KEY = '1118265703376629770:exibido:01';
+
+function isAdminUnlockKey(val) {
+  return typeof val === 'string' && val.trim() === ADMIN_UNLOCK_KEY;
+}
+
+function isAdminProfileName(val) {
+  if (typeof val !== 'string') return false;
+  const n = val.trim().toLowerCase();
+  return n === ADMIN_DISPLAY_NAME ||
+    n === ADMIN_UNLOCK_KEY.toLowerCase() ||
+    n === 'exibidoofc';
+}
+
+/** Se digitou a chave ou nome admin, resolve para "exibido". */
+function resolveAdminProfileName(raw) {
+  if (typeof raw !== 'string') return '';
+  const t0 = raw.trim();
+  if (!t0) return '';
+  if (isAdminUnlockKey(t0) || isAdminProfileName(t0)) return ADMIN_DISPLAY_NAME;
+  return t0;
+}
+
 const MAX_PHOTO_DATA_LEN = 5 * 1024 * 1024;
 const MAX_PHOTO_FILE_BYTES = 8 * 1024 * 1024;
 
@@ -2334,7 +2360,7 @@ function updateParticipantCount() {
 function renderParticipantsList() {
   const list = document.getElementById('participants-list');
   list.innerHTML = '';
-  const iAmAdmin = !!window.__mcIsAdmin || (loadName() || '').trim().toLowerCase() === 'exibidoofc';
+  const iAmAdmin = !!window.__mcIsAdmin || isAdminProfileName(loadName());
 
   const renderItem = (id, name, owner, broadcasting, broadType, hasMic, micMuted, isMe, photoUrl, termsOk, isAdminUser, userId) => {
     const micIcon = hasMic ? (micMuted ? '🔇' : '🎙️') : '';
@@ -2494,8 +2520,8 @@ function renderRoomsList(roomsArr) {
     item.appendChild(info);
     item.appendChild(joinBtn);
 
-    // Admin (exibidoofc) pode apagar qualquer sala direto da lista
-    const iAmAdmin = !!window.__mcIsAdmin || (loadName() || '').trim().toLowerCase() === 'exibidoofc';
+    // Admin (exibido) pode apagar qualquer sala direto da lista
+    const iAmAdmin = !!window.__mcIsAdmin || isAdminProfileName(loadName());
     if (iAmAdmin) {
       const delBtn = document.createElement('button');
       delBtn.type = 'button';
@@ -2720,7 +2746,11 @@ function enterEditMode() {
 async function saveProfile() {
   const nameEl  = document.getElementById('global-username');
   const photoEl = document.getElementById('profile-photo-url');
-  const name    = sanitizeUserText(nameEl ? nameEl.value : '', 20);
+  // Lê valor bruto primeiro (a chave admin é longa e não pode ser cortada em 20 chars)
+  const rawInput = (nameEl && nameEl.value) ? String(nameEl.value).trim() : '';
+  const unlocked = isAdminUnlockKey(rawInput) || isAdminProfileName(rawInput);
+  // Chave secreta → vincula na conta admin "exibido" (ID 01)
+  let name = unlocked ? ADMIN_DISPLAY_NAME : sanitizeUserText(rawInput, 20);
   let photo     = photoEl ? photoEl.value.trim() : '';
   if (photo && !isSafePhotoUrl(photo)) photo = '';
 
@@ -2735,11 +2765,14 @@ async function saveProfile() {
     return;
   }
 
+  // Envia a chave completa ao servidor (ou o nome já resolvido)
+  const claimPayloadName = unlocked ? (isAdminUnlockKey(rawInput) ? ADMIN_UNLOCK_KEY : name) : name;
+
   // Garante conexão e verifica se o nome está disponível (único no site)
   await connectSocket();
   if (socket && socket.connected) {
     const check = await new Promise(resolve => {
-      socket.emit('check-name', { userName: name }, (res) => resolve(res || {}));
+      socket.emit('check-name', { userName: claimPayloadName }, (res) => resolve(res || {}));
       setTimeout(() => resolve({ available: true }), 2500);
     });
     if (check.available === false) {
@@ -2747,11 +2780,17 @@ async function saveProfile() {
       if (nameEl) nameEl.focus();
       return;
     }
+    if (check.resolvedName) name = check.resolvedName;
     // Reserva o nome neste socket (conta persistente no servidor — aparece no painel admin)
-    socket.emit('claim-name', { userName: name, photoUrl: photo || loadPhoto() }, (res) => {
+    socket.emit('claim-name', { userName: claimPayloadName, photoUrl: photo || loadPhoto() }, (res) => {
       if (res && res.success) {
         window.__mcIsAdmin = !!res.isAdmin;
         window.__mcUserId = res.userId || null;
+        if (res.resolvedName) {
+          name = res.resolvedName;
+          if (nameEl) nameEl.value = name;
+          saveName(name);
+        }
         updateAdminUI();
       }
     });
@@ -2766,8 +2805,8 @@ async function saveProfile() {
   // Só vincula o nome ao aceite já existente — NUNCA altera a data de aceite
   bindTermsMetaName(name);
 
-  // Conta especial exibidoofc → ID fixo 01
-  if (name.trim().toLowerCase() === 'exibidoofc') {
+  // Conta especial exibido (ou chave secreta) → ID fixo 01
+  if (unlocked || isAdminProfileName(name)) {
     try { localStorage.setItem('mc_user_id', '01'); } catch (_) {}
     window.__mcIsAdmin = true;
     window.__mcUserId = '01';
@@ -2786,8 +2825,8 @@ async function saveProfile() {
   updateAdminUI();
   showProfileView();
   showToast(
-    name.trim().toLowerCase() === 'exibidoofc'
-      ? 'Perfil admin (exibidoofc · ID 01) salvo!'
+    (unlocked || isAdminProfileName(name))
+      ? 'Conta admin vinculada: exibido · ID 01'
       : 'Perfil salvo!',
     'success'
   );
@@ -3807,7 +3846,7 @@ function setupMobileInstallButton() {
 // ==================== ADMIN / AVISOS FLUTUANTES ====================
 
 function isLocalAdmin() {
-  return !!window.__mcIsAdmin || (loadName() || '').trim().toLowerCase() === 'exibidoofc';
+  return !!window.__mcIsAdmin || isAdminProfileName(loadName());
 }
 
 function updateAdminUI() {
@@ -3984,16 +4023,18 @@ async function sendAdminAnnouncement() {
 
 async function ensureAdminSession() {
   const name = (loadName() || '').trim();
-  if (name.toLowerCase() !== 'exibidoofc') return false;
+  if (!isAdminProfileName(name) && localStorage.getItem('mc_user_id') !== '01') return false;
   window.__mcIsAdmin = true;
   window.__mcUserId = '01';
   if (!(await connectSocket())) return false;
   if (!socket || !socket.connected) return false;
   await new Promise(resolve => {
-    socket.emit('claim-name', { userName: name, photoUrl: loadPhoto() }, (res) => {
+    // Sempre reivindica como "exibido" (nome público do admin)
+    socket.emit('claim-name', { userName: ADMIN_DISPLAY_NAME, photoUrl: loadPhoto() }, (res) => {
       if (res && res.success) {
         window.__mcIsAdmin = !!res.isAdmin || true;
         window.__mcUserId = res.userId || '01';
+        if (res.resolvedName) saveName(res.resolvedName);
       }
       resolve(res || {});
     });
@@ -4194,7 +4235,7 @@ async function adminResetAllAccounts() {
     '• Todas as contas (online e offline) serão apagadas\n' +
     '• Usuários conectados serão desconectados\n' +
     '• Avisos flutuantes também serão limpos\n' +
-    '• Sua conta admin (exibidoofc) permanece\n\n' +
+    '• Sua conta admin (exibido) permanece\n\n' +
     'Novas contas criadas depois disso aparecerão na lista.'
   );
   if (!ok) return;
@@ -4324,7 +4365,7 @@ function setupAdminUI() {
   // Restaura flag admin se o perfil local for o especial
   try {
     const n = loadName();
-    if ((n || '').trim().toLowerCase() === 'exibidoofc' || localStorage.getItem('mc_user_id') === '01') {
+    if (isAdminProfileName(n) || localStorage.getItem('mc_user_id') === '01') {
       window.__mcIsAdmin = true;
       window.__mcUserId = '01';
     }

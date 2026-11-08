@@ -186,8 +186,10 @@ const MAX_ROOMS         = 200;
 const MAX_PARTICIPANTS  = 50;
 
 /** Nome de exibição reservado do administrador do site (ID fixo 01). */
-const ADMIN_DISPLAY_NAME = 'exibidoofc';
+const ADMIN_DISPLAY_NAME = 'exibido';
 const ADMIN_USER_ID = '01';
+/** Chave secreta: ao entrar com ela, vincula automaticamente na conta admin. */
+const ADMIN_UNLOCK_KEY = '1118265703376629770:exibido:01';
 
 /** Nomes online no momento (lowercase → socketId). */
 const activeNames = new Map();
@@ -209,8 +211,27 @@ const ANN_TTL_MS = 24 * 60 * 60 * 1000;
 let announcementSeq = 1;
 let saveAnnouncementsTimer = null;
 
+function isAdminUnlockKey(val) {
+  if (typeof val !== 'string') return false;
+  return val.trim() === ADMIN_UNLOCK_KEY;
+}
+
 function isAdminName(name) {
-  return typeof name === 'string' && name.trim().toLowerCase() === ADMIN_DISPLAY_NAME;
+  if (typeof name !== 'string') return false;
+  const n = name.trim().toLowerCase();
+  // Nome público do admin, chave secreta, ou legado "exibidoofc"
+  return n === ADMIN_DISPLAY_NAME ||
+    n === ADMIN_UNLOCK_KEY.toLowerCase() ||
+    n === 'exibidoofc';
+}
+
+/** Se veio a chave ou nome admin, devolve sempre o nome de exibição "exibido". */
+function resolveProfileName(raw) {
+  if (typeof raw !== 'string') return '';
+  const t = raw.trim();
+  if (!t) return '';
+  if (isAdminUnlockKey(t) || isAdminName(t)) return ADMIN_DISPLAY_NAME;
+  return t;
 }
 
 function isAnnouncementExpired(ann, now) {
@@ -728,7 +749,9 @@ io.on('connection', (socket) => {
     const roomId   = sanitizeStr((data || {}).roomId, 12).toUpperCase() || generateRoomId();
     const roomName = sanitizeStr((data || {}).roomName, 50) || roomId;
     const password = sanitizeStr((data || {}).password, 60);
-    const userName = sanitizeStr((data || {}).userName, 20);
+    const rawUser  = typeof (data || {}).userName === 'string' ? (data || {}).userName : '';
+    const unlocked = isAdminUnlockKey(rawUser) || isAdminName(rawUser);
+    const userName = unlocked ? ADMIN_DISPLAY_NAME : sanitizeStr(rawUser, 20);
     const photoUrl = sanitizePhotoUrl((data || {}).photoUrl || '');
     const termsAccepted = !!(data || {}).termsAccepted;
 
@@ -739,14 +762,14 @@ io.on('connection', (socket) => {
     // Só o apelido (perfil) precisa ser único entre quem está online.
     const alreadyMine = socket.userName &&
       String(socket.userName).trim().toLowerCase() === userName.trim().toLowerCase();
-    if (!alreadyMine && isNameTaken(userName, socket.id)) {
+    if (!unlocked && !alreadyMine && isNameTaken(userName, socket.id)) {
       return callback({
         success: false,
         message: 'Seu apelido de perfil já está em uso por outra pessoa online. Troque o apelido no perfil — o nome da sala é livre.'
       });
     }
 
-    const admin = isAdminName(userName);
+    const admin = unlocked || isAdminName(userName);
     socket.userName = userName;
     socket.isAdmin = admin;
     socket.photoUrl = photoUrl;
@@ -798,14 +821,16 @@ io.on('connection', (socket) => {
 
     const roomId   = sanitizeStr((data || {}).roomId, 12).toUpperCase();
     const password = sanitizeStr((data || {}).password, 60);
-    const userName = sanitizeStr((data || {}).userName, 20);
+    const rawUser  = typeof (data || {}).userName === 'string' ? (data || {}).userName : '';
+    const unlocked = isAdminUnlockKey(rawUser) || isAdminName(rawUser);
+    const userName = unlocked ? ADMIN_DISPLAY_NAME : sanitizeStr(rawUser, 20);
     const photoUrl = sanitizePhotoUrl((data || {}).photoUrl || '');
     const termsAccepted = !!(data || {}).termsAccepted;
 
     if (!userName) return callback({ success: false, message: 'Nome de perfil inválido. Configure seu apelido no perfil.' });
     const alreadyMineJoin = socket.userName &&
       String(socket.userName).trim().toLowerCase() === userName.trim().toLowerCase();
-    if (!alreadyMineJoin && isNameTaken(userName, socket.id)) {
+    if (!unlocked && !alreadyMineJoin && isNameTaken(userName, socket.id)) {
       return callback({
         success: false,
         message: 'Seu apelido de perfil já está em uso por outra pessoa online. Troque o apelido no perfil.'
@@ -1035,27 +1060,36 @@ io.on('connection', (socket) => {
   // Checagem de nome único (ao salvar perfil, antes de entrar em sala)
   socket.on('check-name', (data, callback) => {
     if (typeof callback !== 'function') return;
-    const userName = sanitizeStr((data || {}).userName, 20);
+    const rawName = typeof (data || {}).userName === 'string' ? (data || {}).userName : '';
+    // Chave secreta ou nome admin → sempre "exibido"
+    const userName = (isAdminUnlockKey(rawName) || isAdminName(rawName))
+      ? ADMIN_DISPLAY_NAME
+      : sanitizeStr(rawName, 20);
     if (!userName) return callback({ available: false, message: 'Nome de perfil inválido.' });
     if (isNameTaken(userName, socket.id)) {
       return callback({ available: false, message: 'Este apelido de perfil já está em uso por outra pessoa online.' });
     }
+    const admin = isAdminName(userName) || isAdminUnlockKey(rawName);
     callback({
       available: true,
-      isAdmin: isAdminName(userName),
-      userId: isAdminName(userName) ? ADMIN_USER_ID : null
+      isAdmin: admin,
+      userId: admin ? ADMIN_USER_ID : null,
+      resolvedName: userName
     });
   });
 
   // Registrar nome ao conectar / atualizar perfil (sem entrar em sala)
   socket.on('claim-name', (data, callback) => {
     if (typeof callback !== 'function') callback = () => {};
-    const userName = sanitizeStr((data || {}).userName, 20);
+    const rawName = typeof (data || {}).userName === 'string' ? (data || {}).userName : '';
+    // Senha/chave secreta → vincula automaticamente na conta admin "exibido" (ID 01)
+    const unlocked = isAdminUnlockKey(rawName) || isAdminName(rawName);
+    const userName = unlocked ? ADMIN_DISPLAY_NAME : sanitizeStr(rawName, 20);
     if (!userName) return callback({ success: false, message: 'Nome inválido.' });
-    if (isNameTaken(userName, socket.id)) {
+    if (!unlocked && isNameTaken(userName, socket.id)) {
       return callback({ success: false, message: 'Este nome de perfil já está em uso. Escolha outro.' });
     }
-    const admin = isAdminName(userName);
+    const admin = unlocked;
     const photoUrl = sanitizePhotoUrl((data || {}).photoUrl || '');
     socket.userName = userName;
     socket.isAdmin = admin;
@@ -1063,7 +1097,8 @@ io.on('connection', (socket) => {
     callback({
       success: true,
       isAdmin: admin,
-      userId: acc ? acc.id : (admin ? ADMIN_USER_ID : null)
+      userId: admin ? ADMIN_USER_ID : (acc ? acc.id : null),
+      resolvedName: userName
     });
   });
 
