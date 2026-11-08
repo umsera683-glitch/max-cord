@@ -1,0 +1,21 @@
+{
+  "name": "maxcord",
+  "version": "1.0.0",
+  "description": "MaxCord - Transmissão de tela e áudio/vídeo via WebRTC em tempo real",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "dependencies": {
+    "bcryptjs": "^2.4.3",
+    "cors": "^2.8.5",
+    "dotenv": "^16.4.5",
+    "express": "^4.19.2",
+    "express-rate-limit": "^8.7.1",
+    "helmet": "^8.3.0",
+    "socket.io": "^4.7.5"
+  },
+  "engines": {
+    "node": ">=14.0.0"
+  }
+}

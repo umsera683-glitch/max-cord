@@ -1,0 +1,51 @@
+MaxCord — Discord toggle fix (v4)
+=================================
+
+O que foi corrigido
+-------------------
+1) Escopo OAuth: só "identify" (antes pedia activities.write, e o Discord
+   devolve access_denied → toast "Autorização Discord cancelada" e toggle
+   nunca ficava ativo).
+
+2) Tokens de volta ao site: além da chave one-time, agora vai backup no
+   hash da URL (Render free reinicia e apaga o Map em memória).
+
+3) Cliente lê o hash ANTES de limpar a URL (bug antigo apagava o backup).
+
+Como atualizar
+--------------
+1) Faça commit e push:
+
+PowerShell:
+$g = "C:\Program Files\Git\cmd\git.exe"
+$d = "C:\Users\bracinho\Desktop\site-transmicao"
+& $g -C $d add .
+& $g -C $d commit -m "fix: discord toggle — scope identify + hash backup"
+& $g -C $d push origin main
+
+2) Render → Manual Deploy (ou espera o auto-deploy).
+
+3) No navegador (F12 → Application → Local Storage):
+   apague mc_discord_rpc_enabled e mc_discord_rpc_tokens
+   depois autorize de novo pelo toggle.
+
+4) Discord Developer Portal → OAuth2 → Redirects
+   tem que ter exatamente:
+   https://max-cord.onrender.com/auth/discord/callback
+   (igual à env DISCORD_REDIRECT_URI no Render)
+
+5) (Opcional) Rich Presence → Art Assets
+   upload da imagem do gato neon com nome: logo
+
+Env no Render (obrigatório)
+---------------------------
+DISCORD_CLIENT_ID=...
+DISCORD_CLIENT_SECRET=...
+DISCORD_REDIRECT_URI=https://max-cord.onrender.com/auth/discord/callback
+
+Nota sobre atividade no perfil
+------------------------------
+Com só "identify" a autorização funciona e o toggle fica LIGADO.
+A atividade (Rich Presence) no perfil pode não aparecer até o app ter
+o escopo activities.write aprovado pela Discord — isso é limitação deles,
+não do MaxCord. O status no site mostra "autorizado".

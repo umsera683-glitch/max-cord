@@ -1,0 +1,6 @@
+MaxCord — tag de termos (clique + escudo HD)
+============================================
+- Badge abaixo do nome
+- Escudo SVG em alta resolução
+- Clique na tag → painel interno do site
+- Fecha com ✕, clique fora ou Esc
