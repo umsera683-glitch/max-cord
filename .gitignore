@@ -8,3 +8,9 @@ dist/
 build/
 .vscode/
 .idea/
+
+*.zip
+*.ZIP
+
+*.zip
+*.ZIP
