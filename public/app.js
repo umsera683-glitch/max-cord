@@ -117,59 +117,40 @@ function getAudioCtx() {
   if (_audioCtx && _audioCtx.state === 'suspended') _audioCtx.resume().catch(() => {});
   return _audioCtx;
 }
-/** type: message | join | leave | announce */
+/** type: message | join | leave */
 function playSound(type) {
   try {
     const ctx = getAudioCtx();
     if (!ctx) return;
     const now = ctx.currentTime;
-
-    const tone = (freqStart, freqEnd, dur, peak, wave) => {
-      const o = ctx.createOscillator();
-      const g = ctx.createGain();
-      o.type = wave || 'sine';
-      o.connect(g);
-      g.connect(ctx.destination);
-      o.frequency.setValueAtTime(freqStart, now);
-      if (freqEnd && freqEnd !== freqStart) {
-        o.frequency.exponentialRampToValueAtTime(Math.max(40, freqEnd), now + dur * 0.85);
-      }
-      g.gain.setValueAtTime(0.0001, now);
-      g.gain.exponentialRampToValueAtTime(peak, now + 0.02);
-      g.gain.exponentialRampToValueAtTime(0.0001, now + dur);
-      o.start(now);
-      o.stop(now + dur + 0.02);
-    };
-
+    const o = ctx.createOscillator();
+    const g = ctx.createGain();
+    o.connect(g); g.connect(ctx.destination);
     if (type === 'join') {
-      // Entrada — um pouco mais presente
-      tone(520, 820, 0.32, 0.22, 'sine');
-    } else if (type === 'leave') {
-      tone(420, 200, 0.36, 0.18, 'triangle');
-    } else if (type === 'announce') {
-      // Aviso do site — dois toques suaves e claros
-      const o1 = ctx.createOscillator();
-      const o2 = ctx.createOscillator();
-      const g = ctx.createGain();
-      o1.type = 'sine';
-      o2.type = 'sine';
-      o1.frequency.setValueAtTime(660, now);
-      o2.frequency.setValueAtTime(880, now + 0.12);
-      o1.connect(g);
-      o2.connect(g);
-      g.connect(ctx.destination);
+      o.type = 'sine';
+      o.frequency.setValueAtTime(520, now);
+      o.frequency.exponentialRampToValueAtTime(780, now + 0.12);
       g.gain.setValueAtTime(0.0001, now);
-      g.gain.exponentialRampToValueAtTime(0.24, now + 0.03);
-      g.gain.exponentialRampToValueAtTime(0.08, now + 0.12);
-      g.gain.exponentialRampToValueAtTime(0.26, now + 0.16);
-      g.gain.exponentialRampToValueAtTime(0.0001, now + 0.45);
-      o1.start(now);
-      o1.stop(now + 0.14);
-      o2.start(now + 0.12);
-      o2.stop(now + 0.48);
+      g.gain.exponentialRampToValueAtTime(0.12, now + 0.02);
+      g.gain.exponentialRampToValueAtTime(0.0001, now + 0.28);
+      o.start(now); o.stop(now + 0.3);
+    } else if (type === 'leave') {
+      o.type = 'triangle';
+      o.frequency.setValueAtTime(420, now);
+      o.frequency.exponentialRampToValueAtTime(220, now + 0.2);
+      g.gain.setValueAtTime(0.0001, now);
+      g.gain.exponentialRampToValueAtTime(0.1, now + 0.02);
+      g.gain.exponentialRampToValueAtTime(0.0001, now + 0.32);
+      o.start(now); o.stop(now + 0.35);
     } else {
-      // message — bip um pouco mais audível
-      tone(900, 700, 0.18, 0.16, 'sine');
+      // message — bip curto
+      o.type = 'sine';
+      o.frequency.setValueAtTime(880, now);
+      o.frequency.exponentialRampToValueAtTime(660, now + 0.08);
+      g.gain.setValueAtTime(0.0001, now);
+      g.gain.exponentialRampToValueAtTime(0.09, now + 0.01);
+      g.gain.exponentialRampToValueAtTime(0.0001, now + 0.15);
+      o.start(now); o.stop(now + 0.16);
     }
   } catch (_) {}
 }
@@ -193,63 +174,12 @@ function sanitizeUserText(val, maxLen) {
   return s;
 }
 
-/** ~5MB em data URL (GIF/imagem). Arquivo original costuma ser ~30% menor. */
-/** Conta admin: nome público + chave secreta que vincula automaticamente. */
-const ADMIN_DISPLAY_NAME = 'exibido';
-const ADMIN_USER_ID = '01';
-const ADMIN_UNLOCK_KEY = '1118265703376629770:exibido:01';
-
-function isAdminUnlockKey(val) {
-  return typeof val === 'string' && val.trim() === ADMIN_UNLOCK_KEY;
-}
-
-/** Payload de autenticação admin: sempre a chave, nunca só o nome. */
-function adminAuthUserName() {
-  return ADMIN_UNLOCK_KEY;
-}
-
-/** Só a chave secreta libera admin — "exibidoofc" / "exibido" sozinhos NÃO. */
-function isAdminUnlockInput(val) {
-  return isAdminUnlockKey(val);
-}
-
-/** Nome público já resolvido do admin (exibido). Não concede login. */
-function isAdminDisplayName(val) {
-  if (typeof val !== 'string') return false;
-  return val.trim().toLowerCase() === ADMIN_DISPLAY_NAME;
-}
-
-/** Perfil local é admin se desbloqueou com a chave (ID 01) ou ainda tem a chave salva. */
-function isAdminProfileName(val) {
-  if (isAdminUnlockKey(val)) return true;
-  // Nome "exibido" só conta como admin se já vinculou ID 01 nesta máquina
-  if (isAdminDisplayName(val)) {
-    try {
-      if (localStorage.getItem('mc_user_id') === '01') return true;
-      if (window.__mcIsAdmin) return true;
-    } catch (_) {}
-  }
-  return false;
-}
-
-/** Resolve input: chave → "exibido"; senão devolve o texto limpo. */
-function resolveAdminProfileName(raw) {
-  if (typeof raw !== 'string') return '';
-  const t0 = raw.trim();
-  if (!t0) return '';
-  if (isAdminUnlockKey(t0)) return ADMIN_DISPLAY_NAME;
-  return t0;
-}
-
-const MAX_PHOTO_DATA_LEN = 5 * 1024 * 1024;
-const MAX_PHOTO_FILE_BYTES = 8 * 1024 * 1024;
-
 function isSafePhotoUrl(url) {
   if (typeof url !== 'string') return false;
   const s = url.trim();
   if (!s) return false;
-  if (/^data:image\/(png|jpe?g|gif|webp|bmp);base64,[A-Za-z0-9+/=]+$/i.test(s) && s.length <= MAX_PHOTO_DATA_LEN) return true;
-  if (/^https?:\/\//i.test(s) && s.length <= 8000 && !/[\s<>"']/g.test(s)) return true;
+  if (/^data:image\/(png|jpe?g|gif|webp);base64,[A-Za-z0-9+/=]+$/i.test(s) && s.length <= 1200000) return true;
+  if (/^https:\/\//i.test(s) && s.length <= 4000 && !/[\s<>"']/g.test(s)) return true;
   return false;
 }
 
@@ -289,41 +219,6 @@ function loadName() {
   try { return sanitizeUserText(localStorage.getItem('sh_username') || '', 20); } catch (_) { return ''; }
 }
 
-/** Quando mudar este valor, todos os navegadores apagam perfil local e pedem conta nova. */
-const ACCOUNTS_EPOCH = '2026-11-08-reset-v1';
-const ACCOUNTS_EPOCH_KEY = 'mc_accounts_epoch';
-
-function clearLocalProfileData() {
-  try {
-    localStorage.removeItem('sh_username');
-    localStorage.removeItem('sh_photo');
-    localStorage.removeItem('mc_user_id');
-    // Força recriar perfil (e reaceitar fluxo de conta)
-    localStorage.removeItem(TERMS_KEY);
-    localStorage.removeItem(TERMS_META_KEY);
-  } catch (_) {}
-  // Não apaga avisos fechados: o usuário que fechou não deve vê-los de novo
-  _photoMemory = '';
-  try { idbSetPhoto(''); } catch (_) {}
-  window.__mcIsAdmin = false;
-  window.__mcUserId = null;
-  myName = '';
-}
-
-/** Limpa contas antigas do navegador uma vez (site reiniciou contagem de contas). */
-function ensureFreshAccountsEpoch() {
-  try {
-    const cur = localStorage.getItem(ACCOUNTS_EPOCH_KEY);
-    if (cur === ACCOUNTS_EPOCH) return false;
-    clearLocalProfileData();
-    localStorage.setItem(ACCOUNTS_EPOCH_KEY, ACCOUNTS_EPOCH);
-    return true;
-  } catch (_) {
-    clearLocalProfileData();
-    return true;
-  }
-}
-
 const TERMS_KEY = 'mc_terms_accepted_v1';
 const TERMS_META_KEY = 'mc_terms_meta_v1';
 
@@ -345,51 +240,19 @@ function loadTermsAccepted() {
   } catch (_) { return false; }
 }
 
-/** Data de aceite imutável — só lê do storage, nunca inventa data nova. */
-function getTermsAcceptedAt() {
-  const meta = loadTermsMeta();
-  if (meta && meta.at) return meta.at;
-  return null;
-}
-
-/** Salva aceite ligado ao perfil (apelido) + data.
- *  A data original NUNCA é alterada depois do primeiro aceite,
- *  mesmo se o usuário editar o perfil depois. */
+/** Salva aceite ligado ao perfil (apelido) + data. */
 function saveTermsAccepted(profileName) {
   const name = sanitizeUserText(profileName || loadName() || '', 20);
-  const existing = loadTermsMeta();
-  // Se já aceitou e já tem data, NÃO regrava data nem nada crítico
-  if (existing && existing.accepted && existing.at) {
-    // Só atualiza o nome vinculado, se mudou — data fica intocada
-    if (name && name !== existing.name) {
-      const meta = Object.assign({}, existing, { name: name });
-      try { localStorage.setItem(TERMS_META_KEY, JSON.stringify(meta)); } catch (_) {}
-      return meta;
-    }
-    return existing;
-  }
-  // Primeiro aceite de verdade
   const meta = {
     accepted: true,
-    name: name || (existing && existing.name) || '',
-    at: (existing && existing.at) || new Date().toISOString(),
+    name: name || '',
+    at: new Date().toISOString(),
     version: 'v1'
   };
   try {
     localStorage.setItem(TERMS_KEY, '1');
     localStorage.setItem(TERMS_META_KEY, JSON.stringify(meta));
   } catch (_) {}
-  return meta;
-}
-
-/** Atualiza só o nome no meta dos termos, sem tocar na data de aceite. */
-function bindTermsMetaName(profileName) {
-  const name = sanitizeUserText(profileName || loadName() || '', 20);
-  const existing = loadTermsMeta();
-  if (!existing || !existing.accepted) return existing;
-  if (!name || name === existing.name) return existing;
-  const meta = Object.assign({}, existing, { name: name });
-  try { localStorage.setItem(TERMS_META_KEY, JSON.stringify(meta)); } catch (_) {}
   return meta;
 }
 
@@ -477,111 +340,37 @@ function updateProfileTermsBadge() {
   else badge.classList.add('hidden');
 }
 
-// Foto em memória + IndexedDB (localStorage estoura com GIF/data URL grande)
+// Foto em memória (fallback quando localStorage estoura quota)
 let _photoMemory = '';
-const PHOTO_IDB_NAME = 'maxcord_profile';
-const PHOTO_IDB_STORE = 'photos';
-const PHOTO_IDB_KEY = 'avatar';
-
-function idbOpen() {
-  return new Promise((resolve, reject) => {
-    if (!window.indexedDB) return reject(new Error('no idb'));
-    const req = indexedDB.open(PHOTO_IDB_NAME, 1);
-    req.onupgradeneeded = () => {
-      const db = req.result;
-      if (!db.objectStoreNames.contains(PHOTO_IDB_STORE)) {
-        db.createObjectStore(PHOTO_IDB_STORE);
-      }
-    };
-    req.onsuccess = () => resolve(req.result);
-    req.onerror = () => reject(req.error || new Error('idb open fail'));
-  });
-}
-
-function idbSetPhoto(url) {
-  return idbOpen().then(db => new Promise((resolve, reject) => {
-    try {
-      const tx = db.transaction(PHOTO_IDB_STORE, 'readwrite');
-      const store = tx.objectStore(PHOTO_IDB_STORE);
-      if (url) store.put(url, PHOTO_IDB_KEY);
-      else store.delete(PHOTO_IDB_KEY);
-      tx.oncomplete = () => { try { db.close(); } catch (_) {} resolve(true); };
-      tx.onerror = () => { try { db.close(); } catch (_) {} reject(tx.error); };
-    } catch (e) { reject(e); }
-  })).catch(() => false);
-}
-
-function idbGetPhoto() {
-  return idbOpen().then(db => new Promise((resolve) => {
-    try {
-      const tx = db.transaction(PHOTO_IDB_STORE, 'readonly');
-      const req = tx.objectStore(PHOTO_IDB_STORE).get(PHOTO_IDB_KEY);
-      req.onsuccess = () => {
-        try { db.close(); } catch (_) {}
-        resolve(typeof req.result === 'string' ? req.result : '');
-      };
-      req.onerror = () => { try { db.close(); } catch (_) {} resolve(''); };
-    } catch (_) { resolve(''); }
-  })).catch(() => '');
-}
 
 function savePhoto(url) {
   let u = url || '';
   if (u && !isSafePhotoUrl(u)) u = '';
   _photoMemory = u;
-  // URLs curtas no localStorage; data URLs (GIF/imagem) no IndexedDB
   try {
-    if (u && /^https?:\/\//i.test(u) && u.length <= 8000) {
-      localStorage.setItem('sh_photo', u);
-      idbSetPhoto(''); // limpa data antiga
-    } else if (u && u.startsWith('data:')) {
-      try { localStorage.removeItem('sh_photo'); } catch (_) {}
-      idbSetPhoto(u);
-    } else if (!u) {
-      try { localStorage.removeItem('sh_photo'); } catch (_) {}
-      idbSetPhoto('');
-    } else {
-      try { localStorage.setItem('sh_photo', u); } catch (_) {}
-      idbSetPhoto(u);
-    }
-  } catch (_) {
-    idbSetPhoto(u);
+    if (u) localStorage.setItem('sh_photo', u);
+    else localStorage.removeItem('sh_photo');
+  } catch (err) {
+    // Quota cheia: mantém só em memória nesta sessão
+    try {
+      if (u && u.length < 4000 && /^https:\/\//i.test(u)) {
+        localStorage.setItem('sh_photo', u);
+      } else {
+        // não remove se já tinha URL curta; só avisa se for data grande
+        if (u.startsWith('data:') && u.length > 50000) {
+          showToast('Foto grande: funciona nesta sessão. Para guardar, use link do Tenor/Giphy.', 'info');
+        }
+      }
+    } catch (_) {}
   }
 }
-
 function loadPhoto() {
-  if (_photoMemory && isSafePhotoUrl(_photoMemory)) return _photoMemory;
   try {
     const stored = localStorage.getItem('sh_photo') || '';
     if (stored && isSafePhotoUrl(stored)) return stored;
   } catch (_) {}
-  return '';
-}
-
-/** Carrega foto do IndexedDB para memória (chamar no boot). */
-async function hydratePhotoFromIdb() {
   if (_photoMemory && isSafePhotoUrl(_photoMemory)) return _photoMemory;
-  try {
-    const stored = localStorage.getItem('sh_photo') || '';
-    if (stored && isSafePhotoUrl(stored)) {
-      _photoMemory = stored;
-      return stored;
-    }
-  } catch (_) {}
-  const fromIdb = await idbGetPhoto();
-  if (fromIdb && isSafePhotoUrl(fromIdb)) {
-    _photoMemory = fromIdb;
-    return fromIdb;
-  }
   return '';
-}
-
-/** Envia a foto atual para todos na sala verem o perfil. */
-function broadcastMyPhoto() {
-  if (!socket || !socket.connected || !currentRoomId) return;
-  const photo = loadPhoto();
-  if (!photo || !isSafePhotoUrl(photo)) return;
-  socket.emit('photo-share', { photoUrl: photo });
 }
 
 // ==================== SOCKET ====================
@@ -631,12 +420,8 @@ function setupSocketListeners() {
       name: data.name, isOwner: data.isOwner,
       isBroadcasting: false, broadcastType: null, hasMic: false, micMuted: true,
       photoUrl: data.photoUrl || '',
-      termsAccepted: !!data.termsAccepted,
-      isAdmin: !!data.isAdmin,
-      userId: data.userId || null
+      termsAccepted: !!data.termsAccepted
     });
-    // Garante que o novo usuário receba minha foto (GIF/imagem)
-    setTimeout(() => broadcastMyPhoto(), 200);
     updateParticipantCount();
     renderParticipantsList();
     showToast(`${data.name} entrou na sala`, 'info');
@@ -681,11 +466,7 @@ function setupSocketListeners() {
     removeTilesByPeer(data.id);
     updateParticipantCount();
     renderParticipantsList();
-    if (data && data.kicked) {
-      showToast(`${data.name} foi desconectado pela administração`, 'info');
-    } else {
-      showToast(`${data.name} saiu da sala`, 'info');
-    }
+    showToast(`${data.name} saiu da sala`, 'info');
     playSound('leave');
   });
 
@@ -714,77 +495,11 @@ function setupSocketListeners() {
     setTimeout(() => leaveRoom(false), 1500);
   });
 
-  socket.on('kicked', (data) => {
-    showToast((data && data.message) || 'Você foi desconectado da sala pela administração.', 'error');
-    setTimeout(() => leaveRoom(false), 1200);
-  });
-
-  // Admin forçou mudança de nome neste cliente
-  socket.on('force-rename', (data) => {
-    const name = sanitizeUserText((data && data.name) || '', 20);
-    if (!name) return;
-    saveName(name);
-    myName = name;
-    const el = document.getElementById('global-username');
-    if (el) el.value = name;
-    bindTermsMetaName(name);
-    updateAdminUI();
-    showProfileView();
-    showToast((data && data.message) || ('Seu nome foi alterado para ' + name), 'info');
-    if (currentRoomId) renderParticipantsList();
-  });
-
-  // Admin apagou esta conta (ou reset geral)
-  socket.on('account-deleted', (data) => {
-    showToast((data && data.message) || 'Sua conta foi removida pela administração.', 'error');
-    clearLocalProfileData();
-    const el = document.getElementById('global-username');
-    if (el) el.value = '';
-    const photoEl = document.getElementById('profile-photo-url');
-    if (photoEl) photoEl.value = '';
-    if (currentRoomId) leaveRoom(false);
-    setTimeout(() => {
-      showProfileView();
-      if (typeof enterEditMode === 'function') enterEditMode();
-    }, 400);
-  });
-
-  // Alguém na sala teve o nome alterado pelo admin
-  socket.on('user-renamed', (data) => {
-    if (!data || !data.id) return;
-    if (data.id === myId) return;
-    const p = participants.get(data.id);
-    if (p) {
-      p.name = data.name;
-      p.isAdmin = !!data.isAdmin;
-      p.userId = data.userId || null;
-      renderParticipantsList();
-    }
-  });
-
-  socket.on('site-announcement', (ann) => {
-    if (ann) showSiteAnnouncement(ann);
-  });
-
-  // Sync completo enviado pelo servidor ao conectar
-  socket.on('site-announcements-sync', (data) => {
-    const list = (data && data.announcements) || [];
-    list.forEach(a => showSiteAnnouncement(a, { silent: true }));
-  });
-
-  socket.on('site-announcement-cleared', (data) => {
-    if (data && data.id) removeSiteAnnouncement(data.id);
-    else clearAllSiteAnnouncements();
-  });
-
   // Receber foto de perfil de outro participante (enviada diretamente, não via servidor)
   socket.on('photo-share', (data) => {
-    if (!data || !data.id) return;
-    const url = (data.photoUrl || '').trim();
-    if (!url || !isSafePhotoUrl(url)) return;
     const p = participants.get(data.id);
-    if (p) {
-      p.photoUrl = url;
+    if (p && data.photoUrl) {
+      p.photoUrl = data.photoUrl;
       renderParticipantsList();
     }
   });
@@ -2168,11 +1883,7 @@ async function createRoom() {
     roomId, roomName: rName, password, userName: name,
     photoUrl: loadPhoto(), termsAccepted: loadTermsAccepted()
   }, (res) => {
-    if (res.success) {
-      isOwner = true;
-      if (res.isAdmin) { window.__mcIsAdmin = true; window.__mcUserId = res.userId || '01'; updateAdminUI(); }
-      enterRoom(res.roomId, rName, true);
-    }
+    if (res.success) { isOwner = true; enterRoom(res.roomId, rName, true); }
     else showToast(res.message, 'error');
   });
 }
@@ -2193,16 +1904,13 @@ async function joinRoom(roomId, password) {
   }, (res) => {
     if (res.success) {
       isOwner = res.isOwner;
-      if (res.isAdmin) { window.__mcIsAdmin = true; window.__mcUserId = res.userId || '01'; updateAdminUI(); }
       participants.clear();
       res.participants.forEach(p => participants.set(p.id, {
         name: p.name, isOwner: p.isOwner,
         isBroadcasting: p.isBroadcasting, broadcastType: p.broadcastType,
         hasMic: p.hasMic, micMuted: p.micMuted,
         photoUrl: p.photoUrl || '',
-        termsAccepted: !!p.termsAccepted,
-        isAdmin: !!p.isAdmin,
-        userId: p.userId || null
+        termsAccepted: !!p.termsAccepted
       }));
       enterRoom(res.roomId, res.roomName, res.isOwner);
     } else {
@@ -2228,7 +1936,7 @@ function enterRoom(roomId, rName, owner) {
   document.getElementById('room-name-display').textContent = rName || roomId;
   document.getElementById('room-id-badge').textContent = roomId;
 
-  if (owner || isLocalAdmin()) {
+  if (owner) {
     document.getElementById('btn-delete-room').classList.remove('hidden');
     document.getElementById('btn-delete-room').classList.add('flex');
   }
@@ -2244,9 +1952,6 @@ function enterRoom(roomId, rName, owner) {
     connectToPeer(pid);
     socket.emit('request-peer', { targetId: pid });
   }
-
-  // Envia foto do perfil (GIF/imagem) para todos na sala
-  setTimeout(() => broadcastMyPhoto(), 300);
 
   showToast(`Você entrou em ${rName || roomId}`, 'success');
 }
@@ -2270,16 +1975,13 @@ function rejoinAfterReconnect() {
       return;
     }
     isOwner = res.isOwner;
-    if (res.isAdmin) { window.__mcIsAdmin = true; window.__mcUserId = res.userId || '01'; updateAdminUI(); }
     participants.clear();
     (res.participants || []).forEach(p => participants.set(p.id, {
       name: p.name, isOwner: p.isOwner,
       isBroadcasting: p.isBroadcasting, broadcastType: p.broadcastType,
       hasMic: p.hasMic, micMuted: p.micMuted,
       photoUrl: p.photoUrl || '',
-      termsAccepted: !!p.termsAccepted,
-      isAdmin: !!p.isAdmin,
-      userId: p.userId || null
+      termsAccepted: !!p.termsAccepted
     }));
     updateParticipantCount();
     renderParticipantsList();
@@ -2358,17 +2060,10 @@ function leaveRoom(notify = true) {
   showToast('Você saiu da sala', 'info');
 }
 
-async function deleteRoom(targetRoomId) {
-  const id = targetRoomId || currentRoomId;
-  if (!id) return;
+async function deleteRoom() {
   if (!confirm('Deletar a sala? Todos os participantes serão removidos.')) return;
-  if (!socket || !socket.connected) {
-    showToast('Sem conexão com o servidor', 'error');
-    return;
-  }
-  socket.emit('delete-room', { roomId: id }, (res) => {
-    if (res && !res.success) showToast(res.message || 'Erro ao deletar sala', 'error');
-    else if (!currentRoomId) showToast('Sala removida', 'success');
+  socket.emit('delete-room', (res) => {
+    if (!res.success) showToast(res.message || 'Erro ao deletar sala', 'error');
   });
 }
 
@@ -2381,9 +2076,8 @@ function updateParticipantCount() {
 function renderParticipantsList() {
   const list = document.getElementById('participants-list');
   list.innerHTML = '';
-  const iAmAdmin = !!window.__mcIsAdmin || isAdminProfileName(loadName());
 
-  const renderItem = (id, name, owner, broadcasting, broadType, hasMic, micMuted, isMe, photoUrl, termsOk, isAdminUser, userId) => {
+  const renderItem = (id, name, owner, broadcasting, broadType, hasMic, micMuted, isMe, photoUrl, termsOk) => {
     const micIcon = hasMic ? (micMuted ? '🔇' : '🎙️') : '';
     const vidIcon = broadcasting ? (broadType === 'screen' ? '🖥️' : '📹') : '';
     const div = document.createElement('div');
@@ -2405,12 +2099,6 @@ function renderParticipantsList() {
       nameSpan.appendChild(you);
     }
     nameWrap.appendChild(nameSpan);
-    if (isAdminUser || userId === '01') {
-      const adm = document.createElement('span');
-      adm.className = 'p-admin-tag';
-      adm.textContent = 'ADMIN · ID 01';
-      nameWrap.appendChild(adm);
-    }
     if (termsOk) {
       const badgeRow = document.createElement('div');
       badgeRow.className = 'p-terms-row';
@@ -2423,24 +2111,6 @@ function renderParticipantsList() {
     if (owner) { const s = document.createElement('span'); s.className = 'p-badge'; s.textContent = '👑'; badges.appendChild(s); }
     if (vidIcon) { const s = document.createElement('span'); s.className = 'p-badge'; s.textContent = vidIcon; badges.appendChild(s); }
     if (micIcon) { const s = document.createElement('span'); s.className = 'p-badge'; s.textContent = micIcon; badges.appendChild(s); }
-    // Botão de kick só para o admin, e não em si mesmo
-    if (iAmAdmin && !isMe) {
-      const kickBtn = document.createElement('button');
-      kickBtn.type = 'button';
-      kickBtn.className = 'p-kick-btn';
-      kickBtn.title = 'Desconectar este usuário';
-      kickBtn.textContent = '✕';
-      kickBtn.addEventListener('click', (e) => {
-        e.stopPropagation();
-        if (!confirm(`Desconectar ${name} da sala?`)) return;
-        if (!socket || !socket.connected) return;
-        socket.emit('admin-kick', { targetId: id, roomId: currentRoomId }, (res) => {
-          if (res && !res.success) showToast(res.message || 'Falha ao desconectar', 'error');
-          else showToast(`${name} foi desconectado`, 'success');
-        });
-      });
-      badges.appendChild(kickBtn);
-    }
     div.appendChild(av);
     div.appendChild(nameWrap);
     div.appendChild(badges);
@@ -2449,13 +2119,11 @@ function renderParticipantsList() {
 
   const myBroad = isCameraOn || isScreenSharing;
   const myType  = isScreenSharing ? 'screen' : (isCameraOn ? 'camera' : null);
-  const myAdmin = iAmAdmin;
-  const myUid = window.__mcUserId || (myAdmin ? '01' : null);
-  renderItem(myId, myName, isOwner, myBroad, myType, !!micStream, !isMicOn, true, loadPhoto(), loadTermsAccepted(), myAdmin, myUid);
+  renderItem(myId, myName, isOwner, myBroad, myType, !!micStream, !isMicOn, true, loadPhoto(), loadTermsAccepted());
 
   for (const [pid, p] of participants) {
     if (pid === myId) continue;
-    renderItem(pid, p.name, p.isOwner, p.isBroadcasting, p.broadcastType, p.hasMic, p.micMuted, false, p.photoUrl || '', !!p.termsAccepted, !!p.isAdmin, p.userId || null);
+    renderItem(pid, p.name, p.isOwner, p.isBroadcasting, p.broadcastType, p.hasMic, p.micMuted, false, p.photoUrl || '', !!p.termsAccepted);
   }
 }
 
@@ -2540,22 +2208,6 @@ function renderRoomsList(roomsArr) {
     joinBtn.textContent = 'Entrar';
     item.appendChild(info);
     item.appendChild(joinBtn);
-
-    // Admin (exibido) pode apagar qualquer sala direto da lista
-    const iAmAdmin = !!window.__mcIsAdmin || isAdminProfileName(loadName());
-    if (iAmAdmin) {
-      const delBtn = document.createElement('button');
-      delBtn.type = 'button';
-      delBtn.className = 'room-admin-del';
-      delBtn.title = 'Apagar sala (admin)';
-      delBtn.textContent = '🗑';
-      delBtn.addEventListener('click', (e) => {
-        e.stopPropagation();
-        deleteRoom(safeId);
-      });
-      item.appendChild(delBtn);
-    }
-
     item.addEventListener('click', () => {
       document.getElementById('join-room-id').value = safeId;
       if (room.hasPassword) { document.getElementById('join-password').focus(); showToast('Esta sala tem senha.', 'info'); }
@@ -2764,14 +2416,10 @@ function enterEditMode() {
   setTimeout(() => usernameEl && usernameEl.focus(), 50);
 }
 
-async function saveProfile() {
+function saveProfile() {
   const nameEl  = document.getElementById('global-username');
   const photoEl = document.getElementById('profile-photo-url');
-  // Lê valor bruto primeiro (a chave admin é longa e não pode ser cortada em 20 chars)
-  const rawInput = (nameEl && nameEl.value) ? String(nameEl.value).trim() : '';
-  const unlocked = isAdminUnlockKey(rawInput);
-  // Chave secreta → vincula na conta admin "exibido" (ID 01)
-  let name = unlocked ? ADMIN_DISPLAY_NAME : sanitizeUserText(rawInput, 20);
+  const name    = sanitizeUserText(nameEl ? nameEl.value : '', 20);
   let photo     = photoEl ? photoEl.value.trim() : '';
   if (photo && !isSafePhotoUrl(photo)) photo = '';
 
@@ -2785,72 +2433,15 @@ async function saveProfile() {
     openPrivacyModal();
     return;
   }
-
-  // Envia a chave completa ao servidor (ou o nome já resolvido)
-  const claimPayloadName = unlocked ? (isAdminUnlockKey(rawInput) ? ADMIN_UNLOCK_KEY : name) : name;
-
-  // Garante conexão e verifica se o nome está disponível (único no site)
-  await connectSocket();
-  if (socket && socket.connected) {
-    const check = await new Promise(resolve => {
-      socket.emit('check-name', { userName: claimPayloadName }, (res) => resolve(res || {}));
-      setTimeout(() => resolve({ available: true }), 2500);
-    });
-    if (check.available === false) {
-      showToast(check.message || 'Este nome de perfil já está em uso. Escolha outro.', 'error');
-      if (nameEl) nameEl.focus();
-      return;
-    }
-    if (check.resolvedName) name = check.resolvedName;
-    // Reserva o nome neste socket (conta persistente no servidor — aparece no painel admin)
-    socket.emit('claim-name', { userName: claimPayloadName, photoUrl: photo || loadPhoto() }, (res) => {
-      if (res && res.success) {
-        window.__mcIsAdmin = !!res.isAdmin;
-        window.__mcUserId = res.userId || null;
-        if (res.resolvedName) {
-          name = res.resolvedName;
-          if (nameEl) nameEl.value = name;
-          saveName(name);
-        }
-        updateAdminUI();
-      }
-    });
-  }
-
   if (nameEl) nameEl.value = name;
   if (photoEl) photoEl.value = photo;
   saveName(name);
   savePhoto(photo);
-  // Propaga foto/GIF para quem já está na sala
-  broadcastMyPhoto();
-  // Só vincula o nome ao aceite já existente — NUNCA altera a data de aceite
-  bindTermsMetaName(name);
-
-  // Conta especial exibido (ou chave secreta) → ID fixo 01
-  if (unlocked || isAdminProfileName(name)) {
-    try { localStorage.setItem('mc_user_id', '01'); } catch (_) {}
-    window.__mcIsAdmin = true;
-    window.__mcUserId = '01';
-  } else {
-    try {
-      const prev = localStorage.getItem('mc_user_id');
-      if (prev === '01') localStorage.removeItem('mc_user_id');
-    } catch (_) {}
-    if (window.__mcUserId === '01') {
-      window.__mcIsAdmin = false;
-      window.__mcUserId = null;
-    }
-  }
-
+  // Garante que o aceite fica vinculado ao apelido do perfil
+  saveTermsAccepted(name);
   updateTermsUI();
-  updateAdminUI();
   showProfileView();
-  showToast(
-    (unlocked || isAdminProfileName(name))
-      ? 'Conta admin vinculada: exibido · ID 01'
-      : 'Perfil salvo!',
-    'success'
-  );
+  showToast('Perfil salvo!', 'success');
 }
 
 function setPrivacyAcceptEnabled(enabled) {
@@ -2961,64 +2552,36 @@ function acceptPrivacyFromModal() {
   showToast('Termos aceitos e salvos no seu perfil', 'success');
 }
 
-function applyPhotoToProfileField(dataUrl, opts) {
-  opts = opts || {};
-  if (!dataUrl || !isSafePhotoUrl(dataUrl)) {
-    if (dataUrl && dataUrl.startsWith('data:') && dataUrl.length > MAX_PHOTO_DATA_LEN) {
-      showToast('Arquivo ainda grande demais. Tente outro GIF ou cole um link https no campo da foto.', 'error');
-    } else {
-      showToast('Imagem inválida', 'error');
-    }
-    return false;
-  }
-  const photoEl = document.getElementById('profile-photo-url');
-  if (photoEl) photoEl.value = dataUrl;
-  savePhoto(dataUrl);
-  updateAvatarPreview();
-  broadcastMyPhoto();
-  if (!opts.silent) showToast('Foto do perfil atualizada — todos na sala verão', 'success');
-  return true;
-}
-
 function handlePhotoUpload(file) {
   if (!file) return;
-  if (!file.type || !file.type.startsWith('image/')) {
-    showToast('Selecione uma imagem ou GIF', 'error');
-    return;
-  }
-  if (file.size > MAX_PHOTO_FILE_BYTES) {
-    showToast('Arquivo acima de 8MB. Use um arquivo menor ou cole um link https no campo da foto.', 'error');
+  // Limite generoso: 8MB. Acima disso, oriente a usar URL.
+  if (file.size > 8 * 1024 * 1024) {
+    showToast('Arquivo acima de 8MB. Cole um link do Tenor/Giphy ou use uma imagem menor.', 'error');
     return;
   }
   const isGif = /image\/gif/i.test(file.type) || /\.gif$/i.test(file.name);
-
+  // GIF: mantém animação. Até ~1.5MB cabe bem no socket; acima disso ainda funciona na sessão.
   if (isGif) {
-    // GIF: mantém animação (não passa por canvas)
     const reader = new FileReader();
     reader.onload = (e) => {
       const dataUrl = e.target.result;
-      if (typeof dataUrl !== 'string') {
-        showToast('Não foi possível ler o GIF', 'error');
-        return;
+      const photoEl = document.getElementById('profile-photo-url');
+      if (photoEl) photoEl.value = dataUrl;
+      updateAvatarPreview();
+      if (file.size > 1.5 * 1024 * 1024) {
+        showToast('GIF grande: ok nesta sessão. Para guardar permanentemente, use link Tenor/Giphy.', 'info');
       }
-      // Aceita até o limite alto; só recusa se realmente estourar o buffer
-      if (dataUrl.length > MAX_PHOTO_DATA_LEN) {
-        showToast('Este GIF passou do limite interno. Cole o link do GIF (Tenor/Giphy) no campo da foto.', 'error');
-        return;
-      }
-      applyPhotoToProfileField(dataUrl);
     };
     reader.onerror = () => showToast('Não foi possível ler o GIF', 'error');
     reader.readAsDataURL(file);
     return;
   }
-
-  // Imagem estática: redimensiona e comprime (até 384px)
+  // Imagem estática: redimensiona e comprime (melhor qualidade, até 256px)
   const reader = new FileReader();
   reader.onload = (e) => {
     const img = new Image();
     img.onload = () => {
-      const max = 384;
+      const max = 256;
       let w = img.width, h = img.height;
       if (w > max || h > max) {
         if (w > h) { h = Math.round(h * max / w); w = max; }
@@ -3030,11 +2593,14 @@ function handlePhotoUpload(file) {
       ctx.imageSmoothingEnabled = true;
       ctx.imageSmoothingQuality = 'high';
       ctx.drawImage(img, 0, 0, w, h);
-      let dataUrl = c.toDataURL('image/webp', 0.9);
-      if (!dataUrl || !dataUrl.startsWith('data:image/webp')) {
-        dataUrl = c.toDataURL('image/jpeg', 0.92);
+      // tenta webp; se não, jpeg de boa qualidade
+      let dataUrl = c.toDataURL('image/webp', 0.85);
+      if (!dataUrl.startsWith('data:image/webp')) {
+        dataUrl = c.toDataURL('image/jpeg', 0.88);
       }
-      applyPhotoToProfileField(dataUrl);
+      const photoEl = document.getElementById('profile-photo-url');
+      if (photoEl) photoEl.value = dataUrl;
+      updateAvatarPreview();
     };
     img.onerror = () => showToast('Não foi possível ler a imagem', 'error');
     img.src = e.target.result;
@@ -3080,6 +2646,36 @@ const btnPrivacyAccept = document.getElementById('btn-privacy-accept');
 if (btnPrivacyAccept) btnPrivacyAccept.addEventListener('click', acceptPrivacyFromModal);
 const privacyContent = document.getElementById('privacy-content');
 if (privacyContent) privacyContent.addEventListener('scroll', onPrivacyScroll, { passive: true });
+
+
+// Baixar app Android
+function openDownloadAppModal() {
+  const modal = document.getElementById('modal-download-app');
+  if (modal) modal.classList.remove('hidden');
+}
+function closeDownloadAppModal() {
+  const modal = document.getElementById('modal-download-app');
+  if (modal) modal.classList.add('hidden');
+}
+(function setupDownloadAppModal() {
+  const btn = document.getElementById('btn-download-app');
+  if (btn) btn.addEventListener('click', openDownloadAppModal);
+  const closeBtn = document.getElementById('btn-download-app-close');
+  if (closeBtn) closeBtn.addEventListener('click', closeDownloadAppModal);
+  const cancelBtn = document.getElementById('btn-download-app-cancel');
+  if (cancelBtn) cancelBtn.addEventListener('click', closeDownloadAppModal);
+  const modal = document.getElementById('modal-download-app');
+  if (modal) {
+    modal.addEventListener('click', (e) => {
+      if (e.target === modal) closeDownloadAppModal();
+    });
+  }
+  document.addEventListener('keydown', (e) => {
+    if (e.key !== 'Escape') return;
+    const m = document.getElementById('modal-download-app');
+    if (m && !m.classList.contains('hidden')) closeDownloadAppModal();
+  });
+})();
 
 // Badge de termos: clique abre painel interno (não tooltip do navegador)
 (function setupTermsBadgePopover() {
@@ -3864,503 +3460,353 @@ function setupMobileInstallButton() {
   });
 }
 
-// ==================== ADMIN / AVISOS FLUTUANTES ====================
+// ==================== DISCORD RICH PRESENCE (100% opcional) ====================
+// Padrão: DESLIGADO. Só inicia OAuth após o usuário aceitar o modal de transparência.
+// Tokens ficam apenas no localStorage do navegador; o MaxCord não envia dados da conta a terceiros.
 
-function isLocalAdmin() {
-  // Admin só após desbloqueio com a senha (flag ou ID 01 salvo)
-  if (window.__mcIsAdmin) return true;
+const MC_DISCORD_ENABLED_KEY = 'mc_discord_rpc_enabled';
+const MC_DISCORD_TOKEN_KEY   = 'mc_discord_rpc_tokens';
+
+let discordRpcEnabled = false;
+let discordTokens = null; // { access_token, refresh_token, expires_at, scope, user }
+let discordServerConfigured = false;
+let discordActivityTimer = null;
+let discordSuppressToggleEvent = false;
+
+function loadDiscordPreference() {
   try {
-    if (localStorage.getItem('mc_user_id') === '01' && isAdminDisplayName(loadName())) return true;
-  } catch (_) {}
-  return isAdminUnlockKey((loadName() || '').trim());
-}
-
-function updateAdminUI() {
-  const btnAnn = document.getElementById('btn-admin-announce');
-  const btnAcc = document.getElementById('btn-admin-accounts');
-  const show = isLocalAdmin();
-  if (show) {
-    window.__mcIsAdmin = true;
-    window.__mcUserId = '01';
-    try { localStorage.setItem('mc_user_id', '01'); } catch (_) {}
-  }
-  if (btnAnn) btnAnn.classList.toggle('hidden', !show);
-  if (btnAcc) btnAcc.classList.toggle('hidden', !show);
-}
-
-const CLOSED_ANNS_KEY = 'mc_closed_anns';
-const ANN_TTL_MS_CLIENT = 24 * 60 * 60 * 1000;
-
-function loadClosedAnnouncementIds() {
-  try {
-    // localStorage: sobrevive a fechar o navegador (sessionStorage reaparecia)
-    const raw = localStorage.getItem(CLOSED_ANNS_KEY) || sessionStorage.getItem(CLOSED_ANNS_KEY) || '[]';
-    const arr = JSON.parse(raw);
-    return Array.isArray(arr) ? arr.filter(x => typeof x === 'string') : [];
+    return localStorage.getItem(MC_DISCORD_ENABLED_KEY) === '1';
   } catch (_) {
-    return [];
+    return false;
   }
 }
 
-function markAnnouncementClosed(id) {
-  if (!id) return;
+function saveDiscordPreference(on) {
   try {
-    const closed = loadClosedAnnouncementIds();
-    if (!closed.includes(id)) closed.push(id);
-    // Mantém só os últimos 50 ids fechados
-    const trimmed = closed.slice(-50);
-    localStorage.setItem(CLOSED_ANNS_KEY, JSON.stringify(trimmed));
-    try { sessionStorage.removeItem(CLOSED_ANNS_KEY); } catch (_) {}
+    if (on) localStorage.setItem(MC_DISCORD_ENABLED_KEY, '1');
+    else localStorage.removeItem(MC_DISCORD_ENABLED_KEY);
   } catch (_) {}
 }
 
-function isAnnouncementClosedLocally(id) {
-  return loadClosedAnnouncementIds().includes(id);
-}
-
-function isAnnouncementExpiredClient(ann) {
-  if (!ann) return true;
-  const now = Date.now();
-  if (ann.expiresAt && now >= Number(ann.expiresAt)) return true;
-  if (ann.at && now - Number(ann.at) >= ANN_TTL_MS_CLIENT) return true;
-  return false;
-}
-
-function showSiteAnnouncement(ann, opts) {
-  if (!ann || !ann.id) return;
-  const root = document.getElementById('site-announcements');
-  if (!root) return;
-  // Expirado (24h): não mostra para ninguém
-  if (isAnnouncementExpiredClient(ann)) return;
-  // Já fechou este aviso: não mostra de novo (só aviso NOVO aparece)
-  if (isAnnouncementClosedLocally(ann.id)) return;
-  // Evita duplicar na tela
-  if (document.getElementById('ann-' + ann.id)) return;
-
-  const el = document.createElement('div');
-  el.className = 'site-announcement';
-  el.id = 'ann-' + ann.id;
-  el.setAttribute('role', 'status');
-  el.dataset.annId = ann.id;
-  if (ann.expiresAt) el.dataset.expiresAt = String(ann.expiresAt);
-  else if (ann.at) el.dataset.expiresAt = String(Number(ann.at) + ANN_TTL_MS_CLIENT);
-
-  const body = document.createElement('div');
-  body.className = 'site-announcement-body';
-  const text = document.createElement('div');
-  text.className = 'site-announcement-text';
-  text.textContent = ann.text || '';
-  text.style.whiteSpace = 'pre-wrap';
-  text.style.wordBreak = 'break-word';
-  const meta = document.createElement('div');
-  meta.className = 'site-announcement-meta';
-  const when = ann.at ? new Date(ann.at).toLocaleString('pt-BR', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' }) : '';
-  meta.textContent = (ann.from ? 'Por ' + ann.from : 'Administração') + (when ? ' · ' + when : '') + ' · some em 24h';
-  body.appendChild(text);
-  body.appendChild(meta);
-
-  const close = document.createElement('button');
-  close.type = 'button';
-  close.className = 'site-announcement-close';
-  close.setAttribute('aria-label', 'Fechar aviso');
-  close.textContent = '✕';
-  close.addEventListener('click', () => {
-    removeSiteAnnouncement(ann.id);
-    markAnnouncementClosed(ann.id);
-  });
-
-  el.appendChild(body);
-  el.appendChild(close);
-  root.appendChild(el);
-  // Som só em aviso ao vivo (não ao carregar avisos antigos)
-  if (!opts || opts.silent !== true) {
-    playSound('announce');
+function loadDiscordTokens() {
+  try {
+    const raw = localStorage.getItem(MC_DISCORD_TOKEN_KEY);
+    if (!raw) return null;
+    const t = JSON.parse(raw);
+    if (!t || !t.access_token) return null;
+    return t;
+  } catch (_) {
+    return null;
   }
 }
 
-function removeSiteAnnouncement(id) {
-  const el = document.getElementById('ann-' + id);
-  if (el) el.remove();
+function saveDiscordTokens(t) {
+  try {
+    if (t && t.access_token) {
+      localStorage.setItem(MC_DISCORD_TOKEN_KEY, JSON.stringify(t));
+    } else {
+      localStorage.removeItem(MC_DISCORD_TOKEN_KEY);
+    }
+  } catch (_) {}
 }
 
-function clearAllSiteAnnouncements() {
-  const root = document.getElementById('site-announcements');
-  if (root) root.innerHTML = '';
+function clearDiscordAuth() {
+  discordTokens = null;
+  saveDiscordTokens(null);
+  saveDiscordPreference(false);
+  discordRpcEnabled = false;
+  stopDiscordActivityLoop();
 }
 
-/** Remove da tela avisos que passaram de 24h (cliente). */
-function sweepExpiredAnnouncementUI() {
-  const root = document.getElementById('site-announcements');
-  if (!root) return;
-  const now = Date.now();
-  root.querySelectorAll('.site-announcement').forEach(el => {
-    const exp = Number(el.dataset.expiresAt || 0);
-    if (exp && now >= exp) el.remove();
-  });
-}
-
-// Varre avisos expirados a cada minuto
-setInterval(sweepExpiredAnnouncementUI, 60 * 1000);
-
-async function openAdminAnnounceModal() {
-  if (!isLocalAdmin()) {
-    showToast('Apenas a conta admin pode criar avisos', 'error');
+function updateDiscordStatusUI() {
+  const toggle = document.getElementById('toggle-discord-rpc');
+  const status = document.getElementById('discord-rpc-status');
+  if (toggle) {
+    discordSuppressToggleEvent = true;
+    toggle.checked = !!discordRpcEnabled;
+    toggle.setAttribute('aria-checked', discordRpcEnabled ? 'true' : 'false');
+    discordSuppressToggleEvent = false;
+  }
+  if (!status) return;
+  if (!discordRpcEnabled) {
+    status.classList.add('hidden');
+    status.classList.remove('is-on', 'is-off');
+    status.textContent = '';
     return;
   }
-  await ensureAdminSession();
-  const modal = document.getElementById('modal-admin-announce');
-  const ta = document.getElementById('admin-announce-text');
-  if (modal) modal.classList.remove('hidden');
-  if (ta) { ta.value = ''; ta.focus(); }
+  status.classList.remove('hidden');
+  if (discordTokens && discordTokens.access_token) {
+    const name = (discordTokens.user && (discordTokens.user.global_name || discordTokens.user.username)) || '';
+    status.textContent = name
+      ? 'Conectado como ' + name + ' · atividade ativa'
+      : 'Conectado · atividade ativa';
+    status.classList.add('is-on');
+    status.classList.remove('is-off');
+  } else {
+    status.textContent = 'Ativado — autorize no Discord para mostrar a atividade';
+    status.classList.add('is-off');
+    status.classList.remove('is-on');
+  }
 }
 
-function closeAdminAnnounceModal() {
-  const modal = document.getElementById('modal-admin-announce');
+function openDiscordRpcModal() {
+  const modal = document.getElementById('modal-discord-rpc');
+  if (modal) modal.classList.remove('hidden');
+}
+
+function closeDiscordRpcModal() {
+  const modal = document.getElementById('modal-discord-rpc');
   if (modal) modal.classList.add('hidden');
 }
 
-async function sendAdminAnnouncement() {
-  if (!isLocalAdmin()) return;
-  const ta = document.getElementById('admin-announce-text');
-  const text = (ta && ta.value || '').trim();
-  if (!text) {
-    showToast('Escreva o texto do aviso', 'error');
-    return;
-  }
-  await ensureAdminSession();
-  if (!socket || !socket.connected) {
-    showToast('Sem conexão com o servidor', 'error');
-    return;
-  }
-  socket.emit('admin-announce', {
-    text,
-    userName: adminAuthUserName()
-  }, (res) => {
-    if (res && res.success) {
-      showToast('Aviso publicado!', 'success');
-      closeAdminAnnounceModal();
-      // Garante que o admin também veja o aviso na hora
-      if (res.announcement) showSiteAnnouncement(res.announcement);
-    } else {
-      showToast((res && res.message) || 'Falha ao publicar aviso', 'error');
-    }
-  });
+function startDiscordOAuth() {
+  // Redireciona para o fluxo limpo no servidor (escopos mínimos)
+  window.location.href = '/auth/discord';
 }
 
-async function ensureAdminSession() {
-  // Só mantém sessão admin se esta máquina já desbloqueou com a chave (ID 01)
-  let isLocal = false;
-  try { isLocal = localStorage.getItem('mc_user_id') === '01' || !!window.__mcIsAdmin; } catch (_) {}
-  if (!isLocal && !isAdminUnlockKey((loadName() || '').trim())) return false;
-  window.__mcIsAdmin = true;
-  window.__mcUserId = '01';
-  if (!(await connectSocket())) return false;
-  if (!socket || !socket.connected) return false;
-  await new Promise(resolve => {
-    // Reenvia a SENHA/chave — único meio de autenticar admin no servidor
-    socket.emit('claim-name', { userName: ADMIN_UNLOCK_KEY, photoUrl: loadPhoto() }, (res) => {
-      if (res && res.success && res.isAdmin) {
-        window.__mcIsAdmin = true;
-        window.__mcUserId = res.userId || '01';
-        saveName(res.resolvedName || ADMIN_DISPLAY_NAME);
+function stopDiscordActivityLoop() {
+  if (discordActivityTimer) {
+    clearInterval(discordActivityTimer);
+    discordActivityTimer = null;
+  }
+}
+
+/** Monta o texto da atividade com base no estado atual do MaxCord */
+function buildDiscordActivityPayload() {
+  const name = loadName() || 'Usuário';
+  let details = 'No lobby do MaxCord';
+  let state = 'Pronto para transmitir';
+
+  try {
+    const roomView = document.getElementById('room-view');
+    const inRoom = roomView && !roomView.classList.contains('hidden');
+    if (inRoom) {
+      const roomNameEl = document.getElementById('room-name-display');
+      const roomName = (roomNameEl && roomNameEl.textContent) ? roomNameEl.textContent.trim() : '';
+      details = roomName ? ('Sala: ' + roomName) : 'Em uma sala';
+      if (typeof isScreenSharing !== 'undefined' && isScreenSharing) {
+        state = 'Compartilhando tela';
+      } else if (typeof isCameraOn !== 'undefined' && isCameraOn) {
+        state = 'Com câmera ligada';
       } else {
-        window.__mcIsAdmin = false;
-        window.__mcUserId = null;
-        try { localStorage.removeItem('mc_user_id'); } catch (_) {}
+        state = 'Participando';
       }
-      resolve(res || {});
+    }
+  } catch (_) {}
+
+  return {
+    details: details.slice(0, 128),
+    state: state.slice(0, 128),
+    name: 'MaxCord',
+    type: 0 // Playing
+  };
+}
+
+/**
+ * Tenta atualizar a atividade. Como activities.write exige aprovação Discord,
+ * em muitos casos o endpoint oficial não estará disponível — falha silenciosa.
+ * O importante é: preferência do usuário + token só quando ele autorizou.
+ */
+async function pushDiscordActivity() {
+  if (!discordRpcEnabled || !discordTokens || !discordTokens.access_token) return;
+
+  // Renova se perto de expirar
+  if (discordTokens.expires_at && Date.now() > discordTokens.expires_at - 60000) {
+    await refreshDiscordToken();
+  }
+  if (!discordTokens || !discordTokens.access_token) return;
+
+  const activity = buildDiscordActivityPayload();
+  // Endpoint de atividades (pode retornar 401/403 se o escopo não foi aprovado pela Discord)
+  try {
+    await fetch('https://discord.com/api/v10/users/@me/activities', {
+      method: 'POST',
+      headers: {
+        Authorization: 'Bearer ' + discordTokens.access_token,
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify({ activities: [activity] })
     });
-    setTimeout(resolve, 2000);
-  });
-  return !!window.__mcIsAdmin;
-}
-
-async function openAdminAccountsModal() {
-  if (!isLocalAdmin()) {
-    showToast('Apenas a conta admin pode gerenciar contas', 'error');
-    return;
+  } catch (_) {
+    // Silencioso: rede/CORS/escopo — não interrompe o MaxCord
   }
-  const modal = document.getElementById('modal-admin-accounts');
-  if (modal) modal.classList.remove('hidden');
-  await ensureAdminSession();
-  refreshAdminAccountsList();
 }
 
-function closeAdminAccountsModal() {
-  const modal = document.getElementById('modal-admin-accounts');
-  if (modal) modal.classList.add('hidden');
-}
-
-function getAdminAccountsSearch() {
-  const el = document.getElementById('admin-accounts-search');
-  return el ? (el.value || '').trim() : '';
-}
-
-async function refreshAdminAccountsList() {
-  if (!isLocalAdmin()) return;
-  if (!(await connectSocket())) {
-    showToast('Sem conexão com o servidor', 'error');
-    return;
-  }
-  if (!socket || !socket.connected) {
-    showToast('Sem conexão com o servidor', 'error');
-    return;
-  }
-  const search = getAdminAccountsSearch();
-  const userName = (loadName() || '').trim();
-  socket.emit('admin-list-accounts', {
-    search,
-    userName: adminAuthUserName(),
-    photoUrl: loadPhoto()
-  }, (res) => {
-    if (!res || !res.success) {
-      showToast((res && res.message) || 'Falha ao listar contas', 'error');
-      return;
+async function refreshDiscordToken() {
+  if (!discordTokens || !discordTokens.refresh_token) return false;
+  try {
+    const res = await fetch('/api/discord/refresh', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ refresh_token: discordTokens.refresh_token })
+    });
+    if (!res.ok) {
+      clearDiscordAuth();
+      updateDiscordStatusUI();
+      return false;
     }
-    renderAdminAccountsList(res.accounts || []);
-  });
+    const data = await res.json();
+    discordTokens = {
+      access_token: data.access_token,
+      refresh_token: data.refresh_token || discordTokens.refresh_token,
+      expires_at: Date.now() + ((data.expires_in || 3600) * 1000),
+      scope: data.scope || discordTokens.scope,
+      user: discordTokens.user || null
+    };
+    saveDiscordTokens(discordTokens);
+    return true;
+  } catch (_) {
+    return false;
+  }
 }
 
-function renderAdminAccountsList(list) {
-  const root = document.getElementById('admin-accounts-list');
-  const countEl = document.getElementById('admin-accounts-count');
-  if (!root) return;
-  root.innerHTML = '';
-  const onlineN = (list || []).filter(a => a.online).length;
-  const totalN = (list || []).length;
-  if (countEl) {
-    const q = getAdminAccountsSearch();
-    countEl.textContent = q
-      ? (totalN + ' resultado' + (totalN !== 1 ? 's' : '') + ' · ' + onlineN + ' online')
-      : (totalN + ' conta' + (totalN !== 1 ? 's' : '') + ' · ' + onlineN + ' online');
-  }
+function startDiscordActivityLoop() {
+  stopDiscordActivityLoop();
+  if (!discordRpcEnabled || !discordTokens) return;
+  pushDiscordActivity();
+  discordActivityTimer = setInterval(pushDiscordActivity, 30000);
+}
 
-  if (!list.length) {
-    const empty = document.createElement('p');
-    empty.className = 'admin-accounts-empty';
-    empty.textContent = getAdminAccountsSearch()
-      ? 'Nenhuma conta encontrada para essa pesquisa.'
-      : 'Nenhuma conta criada ainda.';
-    root.appendChild(empty);
-    return;
-  }
-
-  list.forEach(acc => {
-    const item = document.createElement('div');
-    item.className = 'admin-account-item'
-      + (acc.isAdmin ? ' is-admin' : '')
-      + (acc.online ? '' : ' is-offline');
-
-    const av = document.createElement('div');
-    av.className = 'admin-account-av';
-    if (acc.photoUrl && isSafePhotoUrl(acc.photoUrl)) {
-      const img = document.createElement('img');
-      img.src = acc.photoUrl;
-      img.alt = '';
-      av.appendChild(img);
+function setDiscordEnabled(on, opts) {
+  opts = opts || {};
+  if (on) {
+    discordRpcEnabled = true;
+    saveDiscordPreference(true);
+    if (!discordTokens || !discordTokens.access_token) {
+      if (opts.startOAuth) startDiscordOAuth();
     } else {
-      av.textContent = (acc.name || '?').charAt(0).toUpperCase();
+      startDiscordActivityLoop();
     }
-
-    const info = document.createElement('div');
-    info.className = 'admin-account-info';
-    const nameEl = document.createElement('div');
-    nameEl.className = 'admin-account-name';
-    nameEl.textContent = acc.name || '(sem nome)';
-    if (acc.isAdmin) nameEl.textContent += ' · ADMIN';
-    const status = document.createElement('span');
-    status.className = 'admin-status ' + (acc.online ? 'admin-status-online' : 'admin-status-offline');
-    status.textContent = acc.online ? 'ONLINE' : 'OFFLINE';
-    nameEl.appendChild(status);
-
-    const meta = document.createElement('div');
-    meta.className = 'admin-account-meta';
-    const parts = [];
-    if (acc.userId || acc.accountId) parts.push('ID ' + (acc.userId || acc.accountId));
-    if (acc.online) {
-      if (acc.roomId) parts.push('Sala ' + acc.roomId);
-      else parts.push('No lobby');
-    } else {
-      parts.push('Offline');
+  } else {
+    discordRpcEnabled = false;
+    saveDiscordPreference(false);
+    stopDiscordActivityLoop();
+    // Ao desligar pela chave, revoga o uso local dos tokens (usuário pode religar e reautorizar)
+    if (opts.clearTokens) {
+      discordTokens = null;
+      saveDiscordTokens(null);
     }
-    const when = acc.lastSeen || acc.createdAt || acc.claimedAt;
-    if (when) {
-      try {
-        parts.push((acc.online ? 'visto ' : 'último acesso ') + new Date(when).toLocaleString('pt-BR', {
-          day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit'
-        }));
-      } catch (_) {}
-    }
-    meta.textContent = parts.join(' · ');
-    info.appendChild(nameEl);
-    info.appendChild(meta);
-
-    const actions = document.createElement('div');
-    actions.className = 'admin-account-actions';
-
-    const myAccId = window.__mcUserId || null;
-    const isMe = (acc.socketId && (acc.socketId === myId || (socket && acc.socketId === socket.id)))
-      || (myAccId && (acc.accountId === myAccId || acc.userId === myAccId));
-    const isTargetAdmin = !!acc.isAdmin || acc.userId === '01' || acc.accountId === '01';
-
-    if (!isTargetAdmin) {
-      const renameBtn = document.createElement('button');
-      renameBtn.type = 'button';
-      renameBtn.className = 'admin-btn-rename';
-      renameBtn.textContent = 'Renomear';
-      renameBtn.addEventListener('click', () => adminRenameAccount(acc));
-      actions.appendChild(renameBtn);
-    }
-
-    if (!isMe && !isTargetAdmin) {
-      const delBtn = document.createElement('button');
-      delBtn.type = 'button';
-      delBtn.className = 'admin-btn-delete';
-      delBtn.textContent = 'Apagar';
-      delBtn.addEventListener('click', () => adminDeleteAccount(acc));
-      actions.appendChild(delBtn);
-    }
-
-    item.appendChild(av);
-    item.appendChild(info);
-    item.appendChild(actions);
-    root.appendChild(item);
-  });
+  }
+  updateDiscordStatusUI();
 }
 
-function adminRenameAccount(acc) {
-  if (!acc || !(acc.accountId || acc.userId || acc.socketId)) return;
-  const novo = prompt('Novo nome para "' + (acc.name || '') + '":', acc.name || '');
-  if (novo === null) return;
-  const name = sanitizeUserText(novo, 20);
-  if (!name) {
-    showToast('Nome inválido', 'error');
-    return;
-  }
-  if (!socket || !socket.connected) {
-    showToast('Sem conexão', 'error');
-    return;
-  }
-  socket.emit('admin-rename-account', {
-    userName: adminAuthUserName(),
-    accountId: acc.accountId || acc.userId || null,
-    targetId: acc.socketId || null,
-    newName: name,
-    search: getAdminAccountsSearch()
-  }, (res) => {
-    if (res && res.success) {
-      showToast('Nome atualizado', 'success');
-      renderAdminAccountsList(res.accounts || []);
+function handleDiscordOAuthReturn() {
+  try {
+    const params = new URLSearchParams(window.location.search);
+    const status = params.get('discord');
+    if (!status) return;
+
+    if (status === 'ok') {
+      const hash = (window.location.hash || '').replace(/^#/, '');
+      if (hash) {
+        try {
+          let b64 = hash.replace(/-/g, '+').replace(/_/g, '/');
+          while (b64.length % 4) b64 += '=';
+          const json = JSON.parse(atob(b64));
+          if (json && json.access_token) {
+            discordTokens = {
+              access_token: json.access_token,
+              refresh_token: json.refresh_token || '',
+              expires_at: Date.now() + ((json.expires_in || 3600) * 1000),
+              scope: json.scope || '',
+              user: json.user || null
+            };
+            saveDiscordTokens(discordTokens);
+            discordRpcEnabled = true;
+            saveDiscordPreference(true);
+            startDiscordActivityLoop();
+            showToast('Atividade no Discord conectada', 'success');
+          }
+        } catch (_) {
+          showToast('Não foi possível concluir a autorização do Discord', 'error');
+        }
+      }
+    } else if (status === 'denied') {
+      showToast('Autorização Discord cancelada', 'info');
+      setDiscordEnabled(false, { clearTokens: true });
     } else {
-      showToast((res && res.message) || 'Falha ao renomear', 'error');
+      showToast('Falha na autorização Discord', 'error');
+      setDiscordEnabled(false, { clearTokens: false });
     }
-  });
+
+    // Limpa query e hash da URL sem recarregar
+    const clean = window.location.pathname + window.location.hash.replace(/#.*/, '');
+    window.history.replaceState({}, document.title, window.location.pathname);
+  } catch (_) {}
 }
 
-async function adminResetAllAccounts() {
-  if (!isLocalAdmin()) {
-    showToast('Apenas a conta admin pode zerar as contas', 'error');
-    return;
+async function fetchDiscordServerConfig() {
+  try {
+    const res = await fetch('/api/discord/config');
+    if (!res.ok) return;
+    const data = await res.json();
+    discordServerConfigured = !!data.enabled;
+  } catch (_) {
+    discordServerConfigured = false;
   }
-  const ok = window.confirm(
-    'Zerar TODAS as contas do site?\n\n' +
-    '• Todas as contas (online e offline) serão apagadas\n' +
-    '• Usuários conectados serão desconectados\n' +
-    '• Avisos flutuantes também serão limpos\n' +
-    '• Sua conta admin (exibido) permanece\n\n' +
-    'Novas contas criadas depois disso aparecerão na lista.'
-  );
-  if (!ok) return;
-  await ensureAdminSession();
-  if (!socket || !socket.connected) {
-    showToast('Sem conexão com o servidor', 'error');
-    return;
-  }
-  socket.emit('admin-reset-accounts', {
-    userName: adminAuthUserName(),
-    photoUrl: loadPhoto(),
-    clearAnnouncements: true
-  }, (res) => {
-    if (res && res.success) {
-      showToast('Todas as contas foram resetadas', 'success');
-      clearAllSiteAnnouncements();
-      renderAdminAccountsList(res.accounts || []);
-    } else {
-      showToast((res && res.message) || 'Falha ao zerar contas', 'error');
-    }
-  });
 }
 
-function adminDeleteAccount(acc) {
-  if (!acc || !(acc.accountId || acc.userId || acc.socketId)) return;
-  const msg = acc.online
-    ? 'Apagar a conta de "' + (acc.name || '') + '"?\nA pessoa será desconectada e o nome liberado.'
-    : 'Apagar a conta offline de "' + (acc.name || '') + '"?\nO nome será liberado permanentemente.';
-  if (!confirm(msg)) return;
-  if (!socket || !socket.connected) {
-    showToast('Sem conexão', 'error');
-    return;
+function setupDiscordRpcUI() {
+  const toggle = document.getElementById('toggle-discord-rpc');
+  if (!toggle) return;
+
+  // Estado inicial: sempre respeita preferência local (padrão = desligado)
+  discordRpcEnabled = loadDiscordPreference();
+  discordTokens = loadDiscordTokens();
+  if (discordRpcEnabled && discordTokens && discordTokens.access_token) {
+    startDiscordActivityLoop();
   }
-  socket.emit('admin-delete-account', {
-    accountId: acc.accountId || acc.userId || null,
-    targetId: acc.socketId || null,
-    search: getAdminAccountsSearch(),
-    userName: adminAuthUserName()
-  }, (res) => {
-    if (res && res.success) {
-      showToast('Conta removida', 'success');
-      renderAdminAccountsList(res.accounts || []);
+  updateDiscordStatusUI();
+
+  toggle.addEventListener('change', () => {
+    if (discordSuppressToggleEvent) return;
+    const wantOn = !!toggle.checked;
+    if (wantOn) {
+      // Não liga de imediato: mostra modal de transparência
+      discordSuppressToggleEvent = true;
+      toggle.checked = false;
+      toggle.setAttribute('aria-checked', 'false');
+      discordSuppressToggleEvent = false;
+      openDiscordRpcModal();
     } else {
-      showToast((res && res.message) || 'Falha ao apagar conta', 'error');
+      setDiscordEnabled(false, { clearTokens: true });
+      showToast('Atividade no Discord desativada', 'info');
     }
   });
-}
 
-function setupAdminUI() {
-  const btn = document.getElementById('btn-admin-announce');
-  if (btn) btn.addEventListener('click', openAdminAnnounceModal);
-  const closeBtn = document.getElementById('btn-admin-announce-close');
-  if (closeBtn) closeBtn.addEventListener('click', closeAdminAnnounceModal);
-  const sendBtn = document.getElementById('btn-admin-announce-send');
-  if (sendBtn) sendBtn.addEventListener('click', sendAdminAnnouncement);
-  const modal = document.getElementById('modal-admin-announce');
+  const btnAccept = document.getElementById('btn-discord-rpc-accept');
+  const btnCancel = document.getElementById('btn-discord-rpc-cancel');
+  const btnClose  = document.getElementById('btn-discord-rpc-close');
+  const modal     = document.getElementById('modal-discord-rpc');
+
+  if (btnAccept) {
+    btnAccept.addEventListener('click', () => {
+      closeDiscordRpcModal();
+      if (!discordServerConfigured) {
+        // Sem Client ID no servidor: marca preferência e orienta
+        setDiscordEnabled(true, { startOAuth: false });
+        showToast('Integração Discord ainda não configurada no servidor (CLIENT_ID). Preferência salva.', 'info');
+        return;
+      }
+      setDiscordEnabled(true, { startOAuth: true });
+    });
+  }
+  if (btnCancel) btnCancel.addEventListener('click', () => {
+    closeDiscordRpcModal();
+    updateDiscordStatusUI();
+  });
+  if (btnClose) btnClose.addEventListener('click', () => {
+    closeDiscordRpcModal();
+    updateDiscordStatusUI();
+  });
   if (modal) {
     modal.addEventListener('click', (e) => {
-      if (e.target === modal) closeAdminAnnounceModal();
-    });
-  }
-
-  const btnAcc = document.getElementById('btn-admin-accounts');
-  if (btnAcc) btnAcc.addEventListener('click', openAdminAccountsModal);
-  const closeAcc = document.getElementById('btn-admin-accounts-close');
-  if (closeAcc) closeAcc.addEventListener('click', closeAdminAccountsModal);
-  const refreshAcc = document.getElementById('btn-admin-accounts-refresh');
-  if (refreshAcc) refreshAcc.addEventListener('click', refreshAdminAccountsList);
-  const resetAcc = document.getElementById('btn-admin-accounts-reset');
-  if (resetAcc) resetAcc.addEventListener('click', adminResetAllAccounts);
-  const searchAcc = document.getElementById('admin-accounts-search');
-  if (searchAcc) {
-    let searchTimer = null;
-    searchAcc.addEventListener('input', () => {
-      clearTimeout(searchTimer);
-      searchTimer = setTimeout(() => refreshAdminAccountsList(), 250);
-    });
-    searchAcc.addEventListener('keydown', (e) => {
-      if (e.key === 'Enter') {
-        e.preventDefault();
-        clearTimeout(searchTimer);
-        refreshAdminAccountsList();
+      if (e.target === modal) {
+        closeDiscordRpcModal();
+        updateDiscordStatusUI();
       }
     });
   }
-  const modalAcc = document.getElementById('modal-admin-accounts');
-  if (modalAcc) {
-    modalAcc.addEventListener('click', (e) => {
-      if (e.target === modalAcc) closeAdminAccountsModal();
-    });
-  }
-
-  updateAdminUI();
 }
 
 // ==================== INIT ====================
@@ -4368,21 +3814,6 @@ function setupAdminUI() {
 (function init() {
   // Aplicar tema salvo ANTES de tudo (evita flash de tema errado)
   applyTheme(loadTheme());
-
-  // Zera perfis antigos do navegador: site recomeçou contagem de contas
-  const wiped = ensureFreshAccountsEpoch();
-  if (wiped) {
-    console.info('[MaxCord] Contas resetadas — crie o perfil novamente.');
-  }
-
-  // Restaura GIF/foto grande do IndexedDB (não cabe no localStorage)
-  hydratePhotoFromIdb().then((photo) => {
-    if (!photo) return;
-    const photoEl = document.getElementById('profile-photo-url');
-    if (photoEl && !photoEl.value) photoEl.value = photo;
-    try { showProfileView(); } catch (_) {}
-    try { updateAvatarPreview(); } catch (_) {}
-  }).catch(() => {});
 
   // Restaurar qualidade salva
   try {
@@ -4394,52 +3825,14 @@ function setupAdminUI() {
     }
   } catch (_) {}
 
-  // Restaura flag admin se o perfil local for o especial
-  try {
-    const n = loadName();
-    if ((localStorage.getItem('mc_user_id') === '01' && isAdminDisplayName(n)) || isAdminUnlockKey(n)) {
-      window.__mcIsAdmin = true;
-      window.__mcUserId = '01';
-    }
-  } catch (_) {}
-
   const saved = loadName();
-  const nameEl = document.getElementById('global-username');
-  if (nameEl) nameEl.value = saved || '';
-  const photoEl = document.getElementById('profile-photo-url');
-  if (photoEl && !loadPhoto()) photoEl.value = '';
+  if (saved) {
+    const el = document.getElementById('global-username');
+    if (el) el.value = saved;
+  }
   updateTermsUI();
   showProfileView();
-  setupAdminUI();
-  function claimAndLoadAnnouncements() {
-    if (!socket || !socket.connected) return;
-    const n = loadName();
-    if (n) {
-      socket.emit('claim-name', { userName: n, photoUrl: loadPhoto() }, (res) => {
-        if (res && res.success) {
-          window.__mcIsAdmin = !!res.isAdmin;
-          window.__mcUserId = res.userId || null;
-          updateAdminUI();
-        }
-      });
-    }
-    socket.emit('get-announcements', (res) => {
-      const list = (res && res.announcements) || [];
-      list.forEach(a => showSiteAnnouncement(a, { silent: true }));
-    });
-  }
-
-  connectSocket().then(() => {
-    fetchRooms();
-    claimAndLoadAnnouncements();
-    // Em reconexão (ex.: servidor acordou no Render), reivindica nome e puxa avisos de novo
-    if (socket && !socket.__mcAnnReconnectBound) {
-      socket.__mcAnnReconnectBound = true;
-      socket.on('connect', () => {
-        claimAndLoadAnnouncements();
-      });
-    }
-  });
+  connectSocket().then(() => fetchRooms());
 
   // Navegação lateral do lobby arena
   document.querySelectorAll('.arena-nav-item[data-scroll]').forEach(btn => {
@@ -4453,6 +3846,11 @@ function setupAdminUI() {
   });
 
   setupMobileInstallButton();
+
+  // Discord Rich Presence (opcional, padrão OFF)
+  handleDiscordOAuthReturn();
+  setupDiscordRpcUI();
+  fetchDiscordServerConfig();
 
   // Service worker (PWA)
   if ('serviceWorker' in navigator) {

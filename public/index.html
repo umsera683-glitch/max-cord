@@ -43,8 +43,6 @@
 
   <script src="https://cdn.tailwindcss.com"></script>
   <script>
-    // Netlify (estático) aponta o Socket.IO para o backend no Render.
-    // Em qualquer host *.onrender.com ou localhost usa a própria origem.
     window.SOCKET_URL = /netlify\.app$/i.test(location.hostname)
       ? 'https://max-cord.onrender.com'
       : location.origin;
@@ -111,12 +109,20 @@
       <button type="button" class="arena-nav-item" id="btn-privacy">
         <span class="ani">🛡</span> Privacidade
       </button>
-      <button type="button" class="arena-nav-item hidden" id="btn-admin-announce" title="Criar aviso flutuante no site">
-        <span class="ani">📢</span> Aviso
+      <button type="button" class="arena-nav-item" id="btn-download-app" title="Baixar app Android">
+        <span class="ani">📱</span> Baixar app
       </button>
-      <button type="button" class="arena-nav-item hidden" id="btn-admin-accounts" title="Gerenciar contas online">
-        <span class="ani">👥</span> Contas
-      </button>
+      <div class="arena-nav-discord" id="discord-rpc-row">
+        <div class="arena-nav-discord-label">
+          <span class="ani" aria-hidden="true">🎮</span>
+          <span>Mostrar atividade no Discord</span>
+        </div>
+        <label class="mc-switch" title="Ativar ou desativar Rich Presence no Discord">
+          <input type="checkbox" id="toggle-discord-rpc" role="switch" aria-checked="false" aria-label="Mostrar atividade no Discord">
+          <span class="mc-switch-slider"></span>
+        </label>
+      </div>
+      <p id="discord-rpc-status" class="arena-nav-discord-status hidden" aria-live="polite"></p>
     </nav>
 
     <div class="arena-side-bottom">
@@ -150,7 +156,7 @@
               <span class="input-hint">Foto ou GIF</span>
             </div>
             <div class="profile-edit-fields">
-              <input type="text" id="global-username" placeholder="Seu apelido" maxlength="80"
+              <input type="text" id="global-username" placeholder="Seu apelido" maxlength="20"
                 class="input-field" autocomplete="nickname">
               <input type="url" id="profile-photo-url" placeholder="URL da imagem ou GIF (Tenor/Giphy)"
                 class="input-field input-sm">
@@ -604,6 +610,68 @@
   </div>
 </div>
 
+<!-- Modal: Discord Rich Presence (opcional) -->
+<div id="modal-discord-rpc" class="modal-overlay hidden" role="dialog" aria-modal="true" aria-labelledby="discord-rpc-modal-title">
+  <div class="modal-box" style="max-width:440px">
+    <div class="modal-header">
+      <h2 class="modal-title" id="discord-rpc-modal-title">🎮 Atividade no Discord</h2>
+      <button type="button" class="modal-close" id="btn-discord-rpc-close" aria-label="Fechar">✕</button>
+    </div>
+    <div class="modal-body discord-rpc-modal-body">
+      <p class="modal-desc">
+        Ao autorizar, o MaxCord poderá <strong>apenas atualizar a atividade do seu perfil no Discord</strong>
+        (ex.: “Transmitindo no MaxCord” ou o nome da sala em que você está).
+      </p>
+      <ul class="discord-rpc-points">
+        <li>O MaxCord <strong>não coleta</strong> mensagens, amigos, servidores nem dados pessoais da sua conta Discord.</li>
+        <li>Usamos somente o escopo mínimo necessário para mostrar a atividade (autorização OAuth2).</li>
+        <li>Você pode <strong>desligar a qualquer momento</strong> pela mesma chave de alternância no menu.</li>
+        <li>Nenhuma informação da sua conta Discord é armazenada no MaxCord além do necessário para manter a conexão autorizada.</li>
+      </ul>
+      <p class="input-hint" style="margin-top:12px">
+        A autorização abre a página oficial do Discord. Você controla o que aceita lá.
+      </p>
+    </div>
+    <div class="privacy-modal-actions" style="gap:10px">
+      <button type="button" id="btn-discord-rpc-cancel" class="btn-secondary w-full">Cancelar</button>
+      <button type="button" id="btn-discord-rpc-accept" class="btn-primary w-full">Autorizar no Discord</button>
+    </div>
+  </div>
+</div>
+
+
+
+<!-- Modal: Baixar app Android -->
+<div id="modal-download-app" class="modal-overlay hidden" role="dialog" aria-modal="true" aria-labelledby="download-app-modal-title">
+  <div class="modal-box" style="max-width:440px">
+    <div class="modal-header">
+      <h2 class="modal-title" id="download-app-modal-title">📱 App MaxCord para celular</h2>
+      <button type="button" class="modal-close" id="btn-download-app-close" aria-label="Fechar">✕</button>
+    </div>
+    <div class="modal-body">
+      <p class="modal-desc">
+        No <strong>navegador do celular</strong> não é possível transmitir a tela (limitação do sistema).
+        Com o <strong>app Android</strong> você consegue <strong>compartilhar a tela do celular</strong>
+        nas salas do MaxCord — recurso que o site no browser não oferece no mobile.
+      </p>
+      <ul class="download-app-points">
+        <li>Transmita a tela do Android para quem estiver na sala</li>
+        <li>Mesmas salas e link do site MaxCord</li>
+        <li>Arquivo APK oficial do projeto</li>
+      </ul>
+      <p class="input-hint" style="margin-top:12px">
+        No Android pode ser necessário permitir “instalar apps de fontes desconhecidas” para este APK.
+      </p>
+    </div>
+    <div class="privacy-modal-actions" style="gap:10px; flex-direction:column;">
+      <a id="btn-download-apk" class="btn-primary w-full" href="/max-cord.apk" download="max-cord.apk"
+         style="text-align:center; text-decoration:none; display:inline-flex; align-items:center; justify-content:center; gap:8px;">
+        ⬇ Baixar APK
+      </a>
+      <button type="button" id="btn-download-app-cancel" class="btn-secondary w-full">Fechar</button>
+    </div>
+  </div>
+</div>
 
 <!-- Popover interno: detalhes do badge de termos -->
 <div id="mc-terms-popover" class="mc-terms-popover hidden" role="dialog" aria-modal="false" aria-labelledby="mc-terms-popover-title">
@@ -614,44 +682,6 @@
       <button type="button" id="mc-terms-popover-close" class="mc-terms-popover-close" aria-label="Fechar">✕</button>
     </div>
     <p class="mc-terms-popover-text">Este usuário leu e aceitou os <strong>Termos de Uso</strong> e a <strong>Política de Privacidade</strong> do MaxCord.</p>
-  </div>
-</div>
-
-<!-- Avisos flutuantes do site (qualquer usuário pode fechar o próprio) -->
-<div id="site-announcements" class="site-announcements" aria-live="polite"></div>
-
-<!-- Modal simples: criar aviso (somente admin) -->
-<div id="modal-admin-announce" class="modal-overlay hidden" role="dialog" aria-modal="true">
-  <div class="modal-box" style="max-width:420px">
-    <div class="modal-header">
-      <h2 class="modal-title">📢 Novo aviso no site</h2>
-      <button type="button" id="btn-admin-announce-close" class="btn-icon-sm" aria-label="Fechar">✕</button>
-    </div>
-    <p style="font-size:13px;opacity:.8;margin:0 0 12px">O aviso aparece flutuante para todos. Quem fechar não vê de novo (só se for um aviso novo). Expira sozinho após 24 horas. Sem limite de caracteres.</p>
-    <textarea id="admin-announce-text" rows="6" placeholder="Escreva o aviso..." style="width:100%;resize:vertical;border-radius:10px;padding:10px 12px;border:1px solid var(--border);background:var(--bg-input, var(--bg-card));color:inherit;font:inherit;min-height:120px"></textarea>
-    <div style="display:flex;gap:8px;margin-top:14px">
-      <button type="button" id="btn-admin-announce-send" class="btn-primary" style="flex:1">Publicar aviso</button>
-    </div>
-  </div>
-</div>
-
-<!-- Painel admin: gerenciar todas as contas (online + offline) -->
-<div id="modal-admin-accounts" class="modal-overlay hidden" role="dialog" aria-modal="true">
-  <div class="modal-box modal-admin-accounts-box">
-    <div class="modal-header">
-      <h2 class="modal-title">👥 Gerenciar contas</h2>
-      <button type="button" id="btn-admin-accounts-close" class="btn-icon-sm" aria-label="Fechar">✕</button>
-    </div>
-    <p class="admin-accounts-hint">Todas as contas criadas no site (online e offline). Pesquise por nome, renomeie ou apague.</p>
-    <div class="admin-accounts-search-row">
-      <input type="search" id="admin-accounts-search" class="admin-accounts-search" placeholder="Pesquisar por nome ou ID..." autocomplete="off">
-    </div>
-    <div class="admin-accounts-toolbar">
-      <button type="button" id="btn-admin-accounts-refresh" class="btn-secondary btn-sm">Atualizar lista</button>
-      <button type="button" id="btn-admin-accounts-reset" class="btn-secondary btn-sm" style="border-color:rgba(239,68,68,.45);color:#fca5a5" title="Apaga todas as contas (exceto a admin)">Zerar contas</button>
-      <span id="admin-accounts-count" class="admin-accounts-count"></span>
-    </div>
-    <div id="admin-accounts-list" class="admin-accounts-list"></div>
   </div>
 </div>
 
