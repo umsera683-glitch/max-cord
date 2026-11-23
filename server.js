@@ -7,7 +7,6 @@ const bcrypt     = require('bcryptjs');
 const helmet     = require('helmet');
 const rateLimit  = require('express-rate-limit');
 const path       = require('path');
-const fs         = require('fs');
 require('dotenv').config();
 
 /** POST JSON via https nativo (compatível com Node antigo, sem fetch). */
@@ -46,7 +45,7 @@ const server = http.createServer(app);
 
 const PORT = process.env.PORT || 8080;
 
-// Origens permitidas — libera o próprio domínio + variantes comuns de deploy
+// Origens permitidas (o próprio Render + localhost p/ dev)
 const ALLOWED_ORIGINS = [
   'https://max-cord.onrender.com',
   'https://max-cord.netlify.app',
@@ -54,32 +53,18 @@ const ALLOWED_ORIGINS = [
   'http://127.0.0.1:8080'
 ];
 
-function isAllowedOrigin(origin) {
-  if (!origin) return true; // apps nativos / same-origin sem header
-  if (ALLOWED_ORIGINS.includes(origin)) return true;
-  try {
-    const u = new URL(origin);
-    const h = (u.hostname || '').toLowerCase();
-    if (h === 'localhost' || h === '127.0.0.1') return true;
-    if (h.endsWith('.onrender.com')) return true;
-    if (h.endsWith('.netlify.app')) return true;
-    if (h.endsWith('.netlify.com')) return true;
-  } catch (_) {}
-  return false;
-}
-
 // ==================== SOCKET.IO ====================
 const io = new Server(server, {
   cors: {
     origin: (origin, cb) => {
-      if (isAllowedOrigin(origin)) return cb(null, true);
-      console.warn('[CORS] Origem bloqueada no Socket.IO:', origin);
+      // Permite sem origin (apps mobile/desktop nativos) e origens conhecidas
+      if (!origin || ALLOWED_ORIGINS.includes(origin)) return cb(null, true);
       cb(new Error('Origem não permitida: ' + origin));
     },
     methods: ['GET', 'POST']
   },
-  // SDP/ICE + fotos/GIF de perfil em data URL (até ~5MB)
-  maxHttpBufferSize: 6e6
+  // SDP/ICE cabem com folga; fotos de perfil grandes são recusadas no cliente
+  maxHttpBufferSize: 2.5e6
 });
 
 // ==================== MIDDLEWARES DE SEGURANÇA ====================
@@ -93,8 +78,6 @@ app.use(helmet({
       scriptSrc:      ["'self'", "'unsafe-inline'", 'https://cdn.tailwindcss.com', 'https://cdn.socket.io'],
       styleSrc:       ["'self'", "'unsafe-inline'", 'https://cdn.tailwindcss.com'],
       connectSrc:     ["'self'", 'https://max-cord.onrender.com', 'wss://max-cord.onrender.com',
-                       'https://*.onrender.com', 'wss://*.onrender.com',
-                       'https://*.netlify.app', 'wss://*.netlify.app',
                        'https://cdn.socket.io', 'wss://cdn.socket.io',
                        'https://stun.l.google.com', 'https://stun1.l.google.com',
                        'https://stun2.l.google.com', 'https://stun3.l.google.com',
@@ -130,7 +113,7 @@ app.use((req, res, next) => {
 // CORS para rotas HTTP
 app.use(cors({
   origin: (origin, cb) => {
-    if (isAllowedOrigin(origin)) return cb(null, true);
+    if (!origin || ALLOWED_ORIGINS.includes(origin)) return cb(null, true);
     cb(new Error('Origem não permitida'));
   },
   methods: ['GET', 'POST']
@@ -148,6 +131,17 @@ app.use(rateLimit({
 app.use(express.json({ limit: '10kb' }));
 app.use(express.static(path.join(__dirname, 'public')));
 
+// APK do app Android (download direto)
+app.get('/max-cord.apk', (req, res) => {
+  const file = path.join(__dirname, 'public', 'max-cord.apk');
+  res.setHeader('Content-Type', 'application/vnd.android.package-archive');
+  res.setHeader('Content-Disposition', 'attachment; filename="max-cord.apk"');
+  res.sendFile(file, (err) => {
+    if (err && !res.headersSent) res.status(404).send('APK não encontrado');
+  });
+});
+
+
 // ==================== SANITIZAÇÃO ====================
 
 function sanitizeStr(val, maxLen) {
@@ -155,21 +149,18 @@ function sanitizeStr(val, maxLen) {
   return val.trim().slice(0, maxLen || 100).replace(/[<>]/g, '');
 }
 
-/** Tamanho máx. de data URL de foto/GIF (~5MB base64 ≈ arquivo ~3.7MB). */
-const MAX_PHOTO_DATA_LEN = 5 * 1024 * 1024;
-
-/** Foto/GIF de perfil: data URL (png/jpg/gif/webp) ou https. */
+/** Foto/GIF de perfil: permite data URL ou https (limite maior que texto). */
 function sanitizePhotoUrl(val) {
   if (typeof val !== 'string') return '';
   const s = val.trim();
   if (!s) return '';
-  if (/^data:image\/(png|jpe?g|gif|webp|bmp);base64,/i.test(s)) {
-    if (s.length > MAX_PHOTO_DATA_LEN) return '';
-    return s;
+  // data:image (jpg/png/gif/webp) — até ~900KB em base64
+  if (/^data:image\/(png|jpe?g|gif|webp);base64,/i.test(s)) {
+    return s.slice(0, 1200000);
   }
-  // URL http(s) — Tenor/Giphy/Imgur e outros CDNs
+  // URL http(s) — Tenor/Giphy podem ser longas
   if (/^https?:\/\//i.test(s)) {
-    return s.slice(0, 8000).replace(/[<>"']/g, '');
+    return s.slice(0, 4000).replace(/[<>"']/g, '');
   }
   return '';
 }
@@ -184,425 +175,6 @@ const rooms = new Map();
 const EMPTY_ROOM_TTL    = 30 * 60 * 1000; // 30 min vazia
 const MAX_ROOMS         = 200;
 const MAX_PARTICIPANTS  = 50;
-
-/** Nome de exibição reservado do administrador do site (ID fixo 01). */
-const ADMIN_DISPLAY_NAME = 'exibido';
-const ADMIN_USER_ID = '01';
-/** Chave secreta: ao entrar com ela, vincula automaticamente na conta admin. */
-const ADMIN_UNLOCK_KEY = '1118265703376629770:exibido:01';
-
-/** Nomes online no momento (lowercase → socketId). */
-const activeNames = new Map();
-
-/** socketId → accountId (vínculo da sessão atual). */
-const socketToAccount = new Map();
-
-/** Contas persistentes (accountId → registro). Online e offline. */
-const accountRegistry = new Map();
-const ACCOUNTS_FILE = path.join(__dirname, 'data', 'accounts.json');
-let accountSeq = 100;
-let saveAccountsTimer = null;
-
-/** Avisos flutuantes ativos no site (id → { id, text, from, at, expiresAt }). */
-const siteAnnouncements = new Map();
-const ANNOUNCEMENTS_FILE = path.join(__dirname, 'data', 'announcements.json');
-/** Avisos expiram automaticamente após 24 horas. */
-const ANN_TTL_MS = 24 * 60 * 60 * 1000;
-let announcementSeq = 1;
-let saveAnnouncementsTimer = null;
-
-function isAdminUnlockKey(val) {
-  if (typeof val !== 'string') return false;
-  return val.trim() === ADMIN_UNLOCK_KEY;
-}
-
-/** Nome público do admin já resolvido (NÃO concede login sozinho). */
-function isAdminName(name) {
-  if (typeof name !== 'string') return false;
-  return name.trim().toLowerCase() === ADMIN_DISPLAY_NAME;
-}
-
-/**
- * Só a SENHA/chave libera admin.
- * "exibido", "exibidoofc" ou qualquer outro nome NÃO concede admin.
- */
-function tryAdminUnlock(raw) {
-  if (!isAdminUnlockKey(raw)) return null;
-  return { name: ADMIN_DISPLAY_NAME, userId: ADMIN_USER_ID, isAdmin: true };
-}
-
-/** Nome de exibição "exibido" é reservado à conta admin (só via chave). */
-function isReservedAdminDisplayName(name) {
-  if (typeof name !== 'string') return false;
-  return name.trim().toLowerCase() === ADMIN_DISPLAY_NAME;
-}
-
-/** Eleva sessão a admin SOMENTE com a chave secreta no payload. */
-function elevateAdminFromPayload(socket, data) {
-  const raw = typeof (data || {}).userName === 'string' ? (data || {}).userName : '';
-  if (!isAdminUnlockKey(raw)) return false;
-  const prevSid = activeNames.get(ADMIN_DISPLAY_NAME);
-  if (prevSid && prevSid !== socket.id) {
-    activeNames.delete(ADMIN_DISPLAY_NAME);
-    const prevSock = io.sockets.sockets.get(prevSid);
-    if (prevSock) {
-      prevSock.isAdmin = false;
-      if (isAdminName(prevSock.userName)) prevSock.userName = '';
-    }
-  }
-  socket.userName = ADMIN_DISPLAY_NAME;
-  socket.isAdmin = true;
-  registerActiveName(socket.id, ADMIN_DISPLAY_NAME, {
-    photoUrl: sanitizePhotoUrl((data || {}).photoUrl || '')
-  });
-  return true;
-}
-
-
-function isAnnouncementExpired(ann, now) {
-  if (!ann) return true;
-  const t = now || Date.now();
-  if (ann.expiresAt && t >= ann.expiresAt) return true;
-  if (ann.at && t - ann.at >= ANN_TTL_MS) return true;
-  return false;
-}
-
-/** Remove avisos com mais de 24h e grava se mudou. */
-function purgeExpiredAnnouncements() {
-  const now = Date.now();
-  const removedIds = [];
-  for (const [id, ann] of siteAnnouncements) {
-    if (isAnnouncementExpired(ann, now)) {
-      siteAnnouncements.delete(id);
-      removedIds.push(id);
-    }
-  }
-  if (removedIds.length > 0) {
-    scheduleSaveAnnouncements();
-    // Remove só os expirados na UI (não limpa avisos ainda válidos)
-    for (const id of removedIds) {
-      try { io.emit('site-announcement-cleared', { id, reason: 'expired' }); } catch (_) {}
-    }
-    console.log(`[Avisos] ${removedIds.length} aviso(s) expirado(s) removido(s)`);
-  }
-  return removedIds.length;
-}
-
-function getActiveAnnouncements() {
-  const now = Date.now();
-  // Limpa expirados sem emitir se já estivermos só listando (emissão fica no purge periódico)
-  for (const [id, ann] of siteAnnouncements) {
-    if (isAnnouncementExpired(ann, now)) siteAnnouncements.delete(id);
-  }
-  const list = [];
-  for (const ann of siteAnnouncements.values()) {
-    if (!isAnnouncementExpired(ann, now)) list.push(ann);
-  }
-  list.sort((a, b) => (b.at || 0) - (a.at || 0));
-  return list;
-}
-
-function loadAnnouncementsFromDisk() {
-  try {
-    if (!fs.existsSync(ANNOUNCEMENTS_FILE)) return;
-    const raw = fs.readFileSync(ANNOUNCEMENTS_FILE, 'utf8');
-    const data = JSON.parse(raw);
-    if (!data || !Array.isArray(data.announcements)) return;
-    const now = Date.now();
-    for (const ann of data.announcements) {
-      if (!ann || !ann.id || !ann.text) continue;
-      const at = ann.at || Date.now();
-      const expiresAt = ann.expiresAt || (at + ANN_TTL_MS);
-      if (now >= expiresAt) continue; // já expirado no disco
-      siteAnnouncements.set(String(ann.id), {
-        id: String(ann.id),
-        text: String(ann.text).slice(0, 20000),
-        from: String(ann.from || ADMIN_DISPLAY_NAME).slice(0, 40),
-        at,
-        expiresAt
-      });
-      const num = parseInt(String(ann.id).replace(/\D/g, ''), 10);
-      if (!isNaN(num) && num >= announcementSeq) announcementSeq = num + 1;
-    }
-    console.log(`[Avisos] ${siteAnnouncements.size} aviso(s) ativo(s) carregado(s) do disco`);
-  } catch (err) {
-    console.warn('[Avisos] Falha ao carregar announcements.json:', err.message);
-  }
-}
-
-function saveAnnouncementsToDisk() {
-  try {
-    const dir = path.dirname(ANNOUNCEMENTS_FILE);
-    if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
-    const now = Date.now();
-    const list = [];
-    for (const ann of siteAnnouncements.values()) {
-      if (!isAnnouncementExpired(ann, now)) list.push(ann);
-    }
-    fs.writeFileSync(ANNOUNCEMENTS_FILE, JSON.stringify({ announcements: list }, null, 2), 'utf8');
-  } catch (err) {
-    console.warn('[Avisos] Falha ao salvar announcements.json:', err.message);
-  }
-}
-
-function scheduleSaveAnnouncements() {
-  if (saveAnnouncementsTimer) return;
-  saveAnnouncementsTimer = setTimeout(() => {
-    saveAnnouncementsTimer = null;
-    saveAnnouncementsToDisk();
-  }, 300);
-}
-
-function loadAccountsFromDisk() {
-  try {
-    if (!fs.existsSync(ACCOUNTS_FILE)) return;
-    const raw = fs.readFileSync(ACCOUNTS_FILE, 'utf8');
-    const data = JSON.parse(raw);
-    if (!data || !Array.isArray(data.accounts)) return;
-    for (const acc of data.accounts) {
-      if (!acc || !acc.id || !acc.name) continue;
-      accountRegistry.set(acc.id, {
-        id: String(acc.id),
-        name: String(acc.name).slice(0, 20),
-        nameKey: String(acc.name).trim().toLowerCase(),
-        photoUrl: sanitizePhotoUrl(typeof acc.photoUrl === 'string' ? acc.photoUrl : ''),
-        isAdmin: !!acc.isAdmin || isAdminName(acc.name),
-        createdAt: acc.createdAt || Date.now(),
-        lastSeen: acc.lastSeen || acc.createdAt || Date.now()
-      });
-      const num = parseInt(String(acc.id).replace(/\D/g, ''), 10);
-      if (!isNaN(num) && num >= accountSeq) accountSeq = num + 1;
-    }
-    console.log(`[Contas] ${accountRegistry.size} conta(s) carregada(s) do disco`);
-  } catch (err) {
-    console.warn('[Contas] Falha ao carregar accounts.json:', err.message);
-  }
-}
-
-function saveAccountsToDisk() {
-  try {
-    const dir = path.dirname(ACCOUNTS_FILE);
-    if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
-    const list = [];
-    for (const acc of accountRegistry.values()) {
-      list.push({
-        id: acc.id,
-        name: acc.name,
-        photoUrl: acc.photoUrl || '',
-        isAdmin: !!acc.isAdmin,
-        createdAt: acc.createdAt,
-        lastSeen: acc.lastSeen
-      });
-    }
-    fs.writeFileSync(ACCOUNTS_FILE, JSON.stringify({ accounts: list }, null, 2), 'utf8');
-  } catch (err) {
-    console.warn('[Contas] Falha ao salvar accounts.json:', err.message);
-  }
-}
-
-function scheduleSaveAccounts() {
-  if (saveAccountsTimer) return;
-  saveAccountsTimer = setTimeout(() => {
-    saveAccountsTimer = null;
-    saveAccountsToDisk();
-  }, 400);
-}
-
-function findAccountByNameKey(nameKey) {
-  for (const acc of accountRegistry.values()) {
-    if (acc.nameKey === nameKey) return acc;
-  }
-  return null;
-}
-
-function findAccountBySocket(socketId) {
-  const id = socketToAccount.get(socketId);
-  return id ? accountRegistry.get(id) : null;
-}
-
-function nextAccountId(admin) {
-  if (admin) return ADMIN_USER_ID;
-  const id = 'u' + accountSeq;
-  accountSeq += 1;
-  return id;
-}
-
-function registerActiveName(socketId, userName, extra) {
-  const key = (userName || '').trim().toLowerCase();
-  if (!key) return null;
-  // Remove nome anterior deste socket
-  for (const [k, sid] of activeNames) {
-    if (sid === socketId) activeNames.delete(k);
-  }
-  activeNames.set(key, socketId);
-
-  const admin = isAdminName(userName);
-  let acc = findAccountByNameKey(key);
-  // Se este socket já tinha outra conta e mudou de nome, só atualiza a existente se for a mesma
-  const prevAcc = findAccountBySocket(socketId);
-
-  if (!acc) {
-    // Novo perfil: cria conta persistente
-    const id = (prevAcc && !admin && prevAcc.id !== ADMIN_USER_ID && !findAccountByNameKey(key))
-      ? prevAcc.id
-      : nextAccountId(admin);
-    // Se reutiliza id antigo, remove registro anterior com outro nome
-    if (prevAcc && prevAcc.id === id && prevAcc.nameKey !== key) {
-      accountRegistry.delete(prevAcc.id);
-    }
-    acc = {
-      id: admin ? ADMIN_USER_ID : id,
-      name: userName,
-      nameKey: key,
-      photoUrl: (extra && extra.photoUrl) || '',
-      isAdmin: admin,
-      createdAt: Date.now(),
-      lastSeen: Date.now()
-    };
-    // Garante admin único com id 01
-    if (admin) {
-      for (const [aid, a] of accountRegistry) {
-        if (a.isAdmin && aid !== ADMIN_USER_ID) accountRegistry.delete(aid);
-      }
-      acc.id = ADMIN_USER_ID;
-    }
-    accountRegistry.set(acc.id, acc);
-  } else {
-    acc.name = userName;
-    acc.nameKey = key;
-    acc.isAdmin = admin;
-    acc.lastSeen = Date.now();
-    if (extra && extra.photoUrl) acc.photoUrl = extra.photoUrl;
-    if (admin) acc.id = ADMIN_USER_ID;
-    accountRegistry.set(acc.id, acc);
-  }
-
-  socketToAccount.set(socketId, acc.id);
-  scheduleSaveAccounts();
-  return acc;
-}
-
-function releaseActiveName(socketId) {
-  for (const [k, sid] of activeNames) {
-    if (sid === socketId) activeNames.delete(k);
-  }
-  const acc = findAccountBySocket(socketId);
-  if (acc) {
-    acc.lastSeen = Date.now();
-    scheduleSaveAccounts();
-  }
-  socketToAccount.delete(socketId);
-}
-
-function isNameTaken(userName, exceptSocketId) {
-  const key = (userName || '').trim().toLowerCase();
-  if (!key) return false;
-  // Só bloqueia se outro socket ONLINE já estiver com esse nome de PERFIL.
-  // Nome de sala NUNCA entra aqui — salas e perfis são independentes.
-  const ownerSid = activeNames.get(key);
-  if (!ownerSid || ownerSid === exceptSocketId) return false;
-  const sock = io.sockets.sockets.get(ownerSid);
-  // Socket fantasma / desconectado: libera o nome
-  if (!sock || !sock.connected) {
-    activeNames.delete(key);
-    socketToAccount.delete(ownerSid);
-    return false;
-  }
-  return true;
-}
-
-function listAccountsSnapshot(searchQuery) {
-  const q = (searchQuery || '').trim().toLowerCase();
-  const list = [];
-  const seenIds = new Set();
-
-  for (const acc of accountRegistry.values()) {
-    if (q && !String(acc.name || '').toLowerCase().includes(q) && !String(acc.id || '').toLowerCase().includes(q)) {
-      continue;
-    }
-    const onlineSid = activeNames.get(acc.nameKey) || null;
-    const sock = onlineSid ? io.sockets.sockets.get(onlineSid) : null;
-    seenIds.add(acc.id);
-    list.push({
-      accountId: acc.id,
-      socketId: onlineSid,
-      name: acc.name,
-      userId: acc.id,
-      isAdmin: !!acc.isAdmin,
-      photoUrl: acc.photoUrl || '',
-      createdAt: acc.createdAt || null,
-      lastSeen: acc.lastSeen || null,
-      claimedAt: acc.createdAt || null,
-      roomId: (sock && sock.roomId) || null,
-      online: !!sock
-    });
-  }
-
-  // Segurança extra: inclui sockets online com nome que ainda não entraram no registry
-  for (const [sid, sock] of io.sockets.sockets) {
-    if (!sock || !sock.userName) continue;
-    const key = String(sock.userName).trim().toLowerCase();
-    if (!key) continue;
-    let acc = findAccountByNameKey(key) || findAccountBySocket(sid);
-    if (!acc) {
-      // Registra na hora para o painel e persistência
-      acc = registerActiveName(sid, sock.userName, { photoUrl: sock.photoUrl || '' });
-    }
-    if (!acc || seenIds.has(acc.id)) continue;
-    if (q && !String(acc.name || '').toLowerCase().includes(q) && !String(acc.id || '').toLowerCase().includes(q)) {
-      continue;
-    }
-    seenIds.add(acc.id);
-    list.push({
-      accountId: acc.id,
-      socketId: sid,
-      name: acc.name,
-      userId: acc.id,
-      isAdmin: !!acc.isAdmin || !!sock.isAdmin,
-      photoUrl: acc.photoUrl || '',
-      createdAt: acc.createdAt || null,
-      lastSeen: acc.lastSeen || Date.now(),
-      claimedAt: acc.createdAt || null,
-      roomId: sock.roomId || null,
-      online: true
-    });
-  }
-
-  list.sort((a, b) => {
-    if (a.online !== b.online) return a.online ? -1 : 1;
-    if (a.isAdmin !== b.isAdmin) return a.isAdmin ? -1 : 1;
-    return String(a.name || '').localeCompare(String(b.name || ''), 'pt-BR');
-  });
-  return list;
-}
-
-function requireAdmin(socket) {
-  if (!socket) return false;
-  if (socket.isAdmin || isAdminName(socket.userName)) {
-    socket.isAdmin = true;
-    return true;
-  }
-  // Fallback: conta persistente vinculada a este socket é admin (ID 01)
-  const acc = findAccountBySocket(socket.id);
-  if (acc && (acc.isAdmin || acc.id === ADMIN_USER_ID || isAdminName(acc.name))) {
-    socket.isAdmin = true;
-    if (!socket.userName) socket.userName = acc.name || ADMIN_DISPLAY_NAME;
-    return true;
-  }
-  // Fallback: este socket está no activeNames como exibidoofc
-  for (const [nameKey, sid] of activeNames) {
-    if (sid === socket.id && nameKey === ADMIN_DISPLAY_NAME) {
-      socket.isAdmin = true;
-      socket.userName = ADMIN_DISPLAY_NAME;
-      return true;
-    }
-  }
-  return false;
-}
-
-// Carrega contas e avisos salvos ao subir o servidor
-loadAccountsFromDisk();
-loadAnnouncementsFromDisk();
 
 // Rate limit de eventos Socket.io por socket (criar/entrar sala)
 const socketEventCounts = new Map();
@@ -623,7 +195,7 @@ function generateRoomId() {
   return id;
 }
 
-// Limpeza periódica (salas vazias + avisos com mais de 24h)
+// Limpeza periódica
 setInterval(() => {
   const now = Date.now();
   let changed = false;
@@ -635,7 +207,6 @@ setInterval(() => {
     }
   }
   if (changed) broadcastRoomList();
-  try { purgeExpiredAnnouncements(); } catch (_) {}
   // Limpar contadores de rate do socket
   for (const [key, data] of socketEventCounts) {
     if (Date.now() > data.resetAt + 60000) socketEventCounts.delete(key);
@@ -702,14 +273,6 @@ function handleLeave(socket) {
 io.on('connection', (socket) => {
   console.log(`[+] ${socket.id} (${socket.handshake.address})`);
 
-  // Empurra avisos ativos (não expirados) assim que o cliente conecta
-  {
-    const active = getActiveAnnouncements();
-    if (active.length > 0) {
-      socket.emit('site-announcements-sync', { announcements: active });
-    }
-  }
-
   // ---------- Listar salas ----------
   socket.on('list-rooms', (callback) => {
     if (typeof callback !== 'function') return;
@@ -774,36 +337,13 @@ io.on('connection', (socket) => {
     const roomId   = sanitizeStr((data || {}).roomId, 12).toUpperCase() || generateRoomId();
     const roomName = sanitizeStr((data || {}).roomName, 50) || roomId;
     const password = sanitizeStr((data || {}).password, 60);
-    const rawUser  = typeof (data || {}).userName === 'string' ? (data || {}).userName : '';
-    const unlock = tryAdminUnlock(rawUser);
-    if (!unlock && isReservedAdminDisplayName(rawUser)) {
-      return callback({ success: false, message: 'Nome reservado. Use a senha de administrador para a conta admin.' });
-    }
-    const unlocked = !!unlock;
-    const userName = unlock ? unlock.name : sanitizeStr(rawUser, 20);
+    const userName = sanitizeStr((data || {}).userName, 20);
     const photoUrl = sanitizePhotoUrl((data || {}).photoUrl || '');
     const termsAccepted = !!(data || {}).termsAccepted;
 
-    if (!userName)           return callback({ success: false, message: 'Nome de perfil inválido. Configure seu apelido no perfil.' });
+    if (!userName)           return callback({ success: false, message: 'Nome inválido.' });
     if (!isValidRoomId(roomId)) return callback({ success: false, message: 'ID de sala inválido.' });
-    if (rooms.has(roomId))   return callback({ success: false, message: 'Já existe uma sala com este ID. Gere outro ID.' });
-    // Nome da SALA é livre (pode repetir e não conflita com perfil).
-    // Só o apelido (perfil) precisa ser único entre quem está online.
-    const alreadyMine = socket.userName &&
-      String(socket.userName).trim().toLowerCase() === userName.trim().toLowerCase();
-    if (!unlocked && !alreadyMine && isNameTaken(userName, socket.id)) {
-      return callback({
-        success: false,
-        message: 'Seu apelido de perfil já está em uso por outra pessoa online. Troque o apelido no perfil — o nome da sala é livre.'
-      });
-    }
-
-    const admin = unlocked || isAdminName(userName);
-    socket.userName = userName;
-    socket.isAdmin = admin;
-    socket.photoUrl = photoUrl;
-    const acc = registerActiveName(socket.id, userName, { photoUrl });
-    const displayUserId = (acc && acc.id) || (admin ? ADMIN_USER_ID : null);
+    if (rooms.has(roomId))   return callback({ success: false, message: 'Já existe uma sala com este ID.' });
 
     const room = {
       id:          roomId,
@@ -821,24 +361,16 @@ io.on('connection', (socket) => {
       isBroadcasting: false, broadcastType: null,
       hasMic: false, micMuted: true,
       photoUrl: photoUrl,
-      termsAccepted: termsAccepted,
-      isAdmin: admin,
-      userId: displayUserId
+      termsAccepted: termsAccepted
     });
 
     rooms.set(roomId, room);
     socket.join(roomId);
     socket.roomId = roomId;
 
-    callback({
-      success: true,
-      roomId,
-      isOwner: true,
-      isAdmin: admin,
-      userId: displayUserId
-    });
+    callback({ success: true, roomId, isOwner: true });
     broadcastRoomList();
-    console.log(`[Sala] ${roomId} criada por ${userName}${admin ? ' [ADMIN]' : ''}`);
+    console.log(`[Sala] ${roomId} criada por ${userName}`);
   });
 
   // ---------- Entrar na sala ----------
@@ -850,25 +382,11 @@ io.on('connection', (socket) => {
 
     const roomId   = sanitizeStr((data || {}).roomId, 12).toUpperCase();
     const password = sanitizeStr((data || {}).password, 60);
-    const rawUser  = typeof (data || {}).userName === 'string' ? (data || {}).userName : '';
-    const unlock = tryAdminUnlock(rawUser);
-    if (!unlock && isReservedAdminDisplayName(rawUser)) {
-      return callback({ success: false, message: 'Nome reservado. Use a senha de administrador para a conta admin.' });
-    }
-    const unlocked = !!unlock;
-    const userName = unlock ? unlock.name : sanitizeStr(rawUser, 20);
+    const userName = sanitizeStr((data || {}).userName, 20);
     const photoUrl = sanitizePhotoUrl((data || {}).photoUrl || '');
     const termsAccepted = !!(data || {}).termsAccepted;
 
-    if (!userName) return callback({ success: false, message: 'Nome de perfil inválido. Configure seu apelido no perfil.' });
-    const alreadyMineJoin = socket.userName &&
-      String(socket.userName).trim().toLowerCase() === userName.trim().toLowerCase();
-    if (!unlocked && !alreadyMineJoin && isNameTaken(userName, socket.id)) {
-      return callback({
-        success: false,
-        message: 'Seu apelido de perfil já está em uso por outra pessoa online. Troque o apelido no perfil.'
-      });
-    }
+    if (!userName) return callback({ success: false, message: 'Nome inválido.' });
 
     const room = rooms.get(roomId);
     if (!room) return callback({ success: false, message: 'Sala não encontrada.' });
@@ -879,10 +397,7 @@ io.on('connection', (socket) => {
       return callback({ success: false, message: 'Sala cheia.' });
     }
 
-    const admin = unlocked || isAdminName(userName);
-
-    // Admin entra em qualquer sala mesmo com senha
-    if (room.hasPassword && !admin && !bcrypt.compareSync(password, room.password)) {
+    if (room.hasPassword && !bcrypt.compareSync(password, room.password)) {
       return callback({ success: false, message: 'Senha incorreta.' });
     }
 
@@ -896,20 +411,12 @@ io.on('connection', (socket) => {
     // SEGURANÇA: ownership verificado pelo socket.id atual
     const joiningAsOwner = room.ownerId === socket.id;
 
-    socket.userName = userName;
-    socket.isAdmin = admin;
-    socket.photoUrl = photoUrl;
-    const acc = registerActiveName(socket.id, userName, { photoUrl });
-    const displayUserId = (acc && acc.id) || (admin ? ADMIN_USER_ID : null);
-
     room.participants.set(socket.id, {
       name: userName, isOwner: joiningAsOwner,
       isBroadcasting: false, broadcastType: null,
       hasMic: false, micMuted: true,
       photoUrl: photoUrl,
-      termsAccepted: termsAccepted,
-      isAdmin: admin,
-      userId: displayUserId
+      termsAccepted: termsAccepted
     });
 
     socket.join(roomId);
@@ -924,444 +431,35 @@ io.on('connection', (socket) => {
         hasMic:         p.hasMic,
         micMuted:       p.micMuted,
         photoUrl:       p.photoUrl || '',
-        termsAccepted:  !!p.termsAccepted,
-        isAdmin:        !!p.isAdmin,
-        userId:         p.userId || null
+        termsAccepted:  !!p.termsAccepted
       });
     }
 
     socket.to(roomId).emit('user-joined', {
-      id: socket.id, name: userName, isOwner: joiningAsOwner, photoUrl, termsAccepted,
-      isAdmin: admin, userId: displayUserId
+      id: socket.id, name: userName, isOwner: joiningAsOwner, photoUrl, termsAccepted
     });
 
-    callback({
-      success: true,
-      roomId,
-      roomName: room.name,
-      isOwner: joiningAsOwner,
-      participants,
-      isAdmin: admin,
-      userId: displayUserId
-    });
+    callback({ success: true, roomId, roomName: room.name, isOwner: joiningAsOwner, participants });
     broadcastRoomList();
-    console.log(`[Sala] ${userName} entrou em ${roomId}${admin ? ' [ADMIN]' : ''}`);
+    console.log(`[Sala] ${userName} entrou em ${roomId}`);
   });
 
   // ---------- Deletar sala ----------
-  // Dono da sala OU admin (exibidoofc) podem deletar.
-  // Admin pode informar roomId alvo mesmo sem estar dentro da sala.
-  socket.on('delete-room', (data, callback) => {
-    // Compat: clients antigos chamam só com callback
-    if (typeof data === 'function') { callback = data; data = {}; }
-    const targetRoomId = sanitizeStr((data || {}).roomId, 12).toUpperCase() || socket.roomId;
-    if (!targetRoomId) return callback && callback({ success: false, message: 'Sala não informada.' });
+  socket.on('delete-room', (callback) => {
+    const roomId = socket.roomId;
+    if (!roomId) return callback && callback({ success: false });
+    const room = rooms.get(roomId);
+    if (!room || room.ownerId !== socket.id) return callback && callback({ success: false, message: 'Sem permissão.' });
 
-    const room = rooms.get(targetRoomId);
-    if (!room) return callback && callback({ success: false, message: 'Sala não encontrada.' });
-
-    const isOwner = room.ownerId === socket.id;
-    const admin = !!socket.isAdmin || isAdminName(socket.userName);
-    if (!isOwner && !admin) {
-      return callback && callback({ success: false, message: 'Sem permissão.' });
-    }
-
-    const msg = admin && !isOwner
-      ? 'A sala foi removida pela administração.'
-      : 'A sala foi deletada pelo dono.';
-    io.to(targetRoomId).emit('room-deleted', { message: msg });
+    io.to(roomId).emit('room-deleted', { message: 'A sala foi deletada pelo dono.' });
     for (const [id] of room.participants) {
       const s = io.sockets.sockets.get(id);
-      if (s) { s.leave(targetRoomId); s.roomId = null; }
+      if (s) { s.leave(roomId); s.roomId = null; }
     }
-    rooms.delete(targetRoomId);
-    if (socket.roomId === targetRoomId) socket.roomId = null;
+    rooms.delete(roomId);
+    socket.roomId = null;
     callback && callback({ success: true });
     broadcastRoomList();
-    console.log(`[Sala] ${targetRoomId} deletada por ${socket.userName || socket.id}${admin ? ' [ADMIN]' : ''}`);
-  });
-
-  // ---------- Kick / desconectar usuário (somente admin) ----------
-  socket.on('admin-kick', (data, callback) => {
-    if (typeof callback !== 'function') callback = () => {};
-    if (!socket.isAdmin && !isAdminName(socket.userName)) {
-      return callback({ success: false, message: 'Sem permissão de administrador.' });
-    }
-    const targetId = sanitizeStr((data || {}).targetId, 40);
-    const targetRoomId = sanitizeStr((data || {}).roomId, 12).toUpperCase() || socket.roomId;
-    if (!targetId) return callback({ success: false, message: 'Alvo inválido.' });
-
-    // Procura o alvo em qualquer sala se roomId não informado
-    let room = targetRoomId ? rooms.get(targetRoomId) : null;
-    if (!room) {
-      for (const r of rooms.values()) {
-        if (r.participants.has(targetId)) { room = r; break; }
-      }
-    }
-    if (!room || !room.participants.has(targetId)) {
-      return callback({ success: false, message: 'Usuário não encontrado em nenhuma sala.' });
-    }
-
-    const targetSocket = io.sockets.sockets.get(targetId);
-    const targetName = (room.participants.get(targetId) || {}).name || 'Usuário';
-    room.participants.delete(targetId);
-    if (targetSocket) {
-      targetSocket.leave(room.id);
-      targetSocket.roomId = null;
-      targetSocket.emit('kicked', {
-        message: 'Você foi desconectado da sala pela administração.',
-        by: socket.userName || ADMIN_DISPLAY_NAME
-      });
-    }
-    io.to(room.id).emit('user-left', { id: targetId, name: targetName, kicked: true });
-    if (room.participants.size === 0) room.emptyAt = Date.now();
-    callback({ success: true });
-    broadcastRoomList();
-    console.log(`[Admin] ${socket.userName} kickou ${targetName} (${targetId}) da sala ${room.id}`);
-  });
-
-  // ---------- Avisos flutuantes do site (somente admin) ----------
-  socket.on('admin-announce', (data, callback) => {
-    if (typeof callback !== 'function') callback = () => {};
-    // Garante sessão admin (mesmo padrão do painel de contas)
-    elevateAdminFromPayload(socket, data || {});
-    if (!requireAdmin(socket)) {
-      return callback({ success: false, message: 'Sem permissão de administrador.' });
-    }
-    // Sem limite prático de letras (só proteção básica contra abuso extremo)
-    let text = typeof (data || {}).text === 'string' ? (data || {}).text : '';
-    text = text.replace(/[<>]/g, '').trim();
-    if (text.length > 20000) text = text.slice(0, 20000);
-    if (!text) return callback({ success: false, message: 'Texto do aviso vazio.' });
-
-    purgeExpiredAnnouncements();
-    const id = 'ann-' + (announcementSeq++);
-    const now = Date.now();
-    const ann = {
-      id,
-      text,
-      from: socket.userName || ADMIN_DISPLAY_NAME,
-      at: now,
-      expiresAt: now + ANN_TTL_MS
-    };
-    siteAnnouncements.set(id, ann);
-    // Limita quantos avisos ficam guardados
-    if (siteAnnouncements.size > 20) {
-      const oldest = siteAnnouncements.keys().next().value;
-      siteAnnouncements.delete(oldest);
-    }
-    scheduleSaveAnnouncements();
-    // Envia para TODOS os clientes conectados (qualquer página/computador)
-    io.emit('site-announcement', ann);
-    callback({ success: true, announcement: ann });
-    console.log(`[Admin] Aviso publicado por ${ann.from} → ${io.engine.clientsCount} cliente(s), expira em 24h: ${text.slice(0, 60)}`);
-  });
-
-  socket.on('admin-clear-announcement', (data, callback) => {
-    if (typeof callback !== 'function') callback = () => {};
-    if (!requireAdmin(socket)) {
-      return callback({ success: false, message: 'Sem permissão de administrador.' });
-    }
-    const id = sanitizeStr((data || {}).id, 40);
-    if (id) siteAnnouncements.delete(id);
-    else siteAnnouncements.clear();
-    scheduleSaveAnnouncements();
-    io.emit('site-announcement-cleared', { id: id || null });
-    callback({ success: true });
-  });
-
-  // Cliente pede avisos ativos (não expirados) ao conectar / abrir o site
-  socket.on('get-announcements', (callback) => {
-    if (typeof callback !== 'function') return;
-    callback({ announcements: getActiveAnnouncements() });
-  });
-
-  // Checagem de nome único (ao salvar perfil, antes de entrar em sala)
-  socket.on('check-name', (data, callback) => {
-    if (typeof callback !== 'function') return;
-    const rawName = typeof (data || {}).userName === 'string' ? (data || {}).userName : '';
-    const unlock = tryAdminUnlock(rawName);
-    // Só a chave libera admin; nome "exibido" sozinho é reservado
-    if (!unlock && isReservedAdminDisplayName(rawName)) {
-      return callback({
-        available: false,
-        message: 'Este nome é reservado. Use a senha de administrador para entrar nessa conta.'
-      });
-    }
-    const userName = unlock ? unlock.name : sanitizeStr(rawName, 20);
-    if (!userName) return callback({ available: false, message: 'Nome de perfil inválido.' });
-    if (!unlock && isNameTaken(userName, socket.id)) {
-      return callback({ available: false, message: 'Este apelido de perfil já está em uso por outra pessoa online.' });
-    }
-    callback({
-      available: true,
-      isAdmin: !!unlock,
-      userId: unlock ? unlock.userId : null,
-      resolvedName: userName
-    });
-  });
-
-  // Registrar nome ao conectar / atualizar perfil (sem entrar em sala)
-  socket.on('claim-name', (data, callback) => {
-    if (typeof callback !== 'function') callback = () => {};
-    const rawName = typeof (data || {}).userName === 'string' ? (data || {}).userName : '';
-    // SOMENTE a senha/chave vincula na conta admin "exibido" (ID 01)
-    // "exibidoofc", "exibido" etc. NÃO liberam admin
-    const unlock = tryAdminUnlock(rawName);
-    if (!unlock && isReservedAdminDisplayName(rawName)) {
-      return callback({
-        success: false,
-        message: 'Este nome é reservado. Entre com a senha de administrador para usar a conta admin.'
-      });
-    }
-    const userName = unlock ? unlock.name : sanitizeStr(rawName, 20);
-    if (!userName) return callback({ success: false, message: 'Nome inválido.' });
-    if (!unlock && isNameTaken(userName, socket.id)) {
-      return callback({ success: false, message: 'Este nome de perfil já está em uso. Escolha outro.' });
-    }
-    const admin = !!unlock;
-    const photoUrl = sanitizePhotoUrl((data || {}).photoUrl || '');
-    socket.userName = userName;
-    socket.isAdmin = admin;
-    const acc = registerActiveName(socket.id, userName, { photoUrl });
-    callback({
-      success: true,
-      isAdmin: admin,
-      userId: admin ? ADMIN_USER_ID : (acc ? acc.id : null),
-      resolvedName: userName
-    });
-  });
-
-  // ========== Painel admin: todas as contas (online + offline) ==========
-  socket.on('admin-list-accounts', (data, callback) => {
-    // Compat: pode vir só callback
-    if (typeof data === 'function') { callback = data; data = {}; }
-    if (typeof callback !== 'function') return;
-
-    // Só a chave secreta eleva a sessão a admin
-    elevateAdminFromPayload(socket, data || {});
-
-    if (!requireAdmin(socket)) {
-      return callback({ success: false, message: 'Sem permissão de administrador.' });
-    }
-    const search = sanitizeStr((data || {}).search || '', 40);
-    callback({ success: true, accounts: listAccountsSnapshot(search) });
-  });
-
-  // Admin renomeia conta (online ou offline) por accountId ou socketId
-  socket.on('admin-rename-account', (data, callback) => {
-    if (typeof callback !== 'function') callback = () => {};
-    elevateAdminFromPayload(socket, data || {});
-    if (!requireAdmin(socket)) {
-      return callback({ success: false, message: 'Sem permissão de administrador.' });
-    }
-    const accountId = sanitizeStr((data || {}).accountId, 40);
-    const targetSocketId = sanitizeStr((data || {}).targetId, 40);
-    const newName = sanitizeStr((data || {}).newName, 20);
-    const search = sanitizeStr((data || {}).search || '', 40);
-    if (!newName) return callback({ success: false, message: 'Nome inválido.' });
-    if (isAdminName(newName)) {
-      return callback({ success: false, message: 'O nome de administrador é reservado.' });
-    }
-
-    let acc = accountId ? accountRegistry.get(accountId) : null;
-    if (!acc && targetSocketId) acc = findAccountBySocket(targetSocketId);
-    if (!acc) return callback({ success: false, message: 'Conta não encontrada.' });
-    if (acc.isAdmin || acc.id === ADMIN_USER_ID) {
-      return callback({ success: false, message: 'Não é possível renomear a conta admin.' });
-    }
-
-    const newKey = newName.trim().toLowerCase();
-    const conflict = findAccountByNameKey(newKey);
-    if (conflict && conflict.id !== acc.id) {
-      return callback({ success: false, message: 'Este nome já está em uso.' });
-    }
-
-    const oldName = acc.name;
-    const oldKey = acc.nameKey;
-    acc.name = newName;
-    acc.nameKey = newKey;
-    acc.lastSeen = Date.now();
-    accountRegistry.set(acc.id, acc);
-    scheduleSaveAccounts();
-
-    // Se estiver online, atualiza sessão e sala
-    const onlineSid = activeNames.get(oldKey) || activeNames.get(newKey) || null;
-    // Reindexa activeNames
-    if (activeNames.get(oldKey)) {
-      const sid = activeNames.get(oldKey);
-      activeNames.delete(oldKey);
-      activeNames.set(newKey, sid);
-    }
-    const targetSocket = onlineSid ? io.sockets.sockets.get(onlineSid) : null;
-    if (targetSocket) {
-      targetSocket.userName = newName;
-      targetSocket.isAdmin = false;
-      const roomId = targetSocket.roomId;
-      if (roomId && rooms.has(roomId)) {
-        const room = rooms.get(roomId);
-        const p = room.participants.get(onlineSid);
-        if (p) {
-          p.name = newName;
-          p.isAdmin = false;
-          p.userId = acc.id;
-        }
-        if (room.ownerId === onlineSid) room.ownerName = newName;
-        io.to(roomId).emit('user-renamed', {
-          id: onlineSid,
-          oldName,
-          name: newName,
-          isAdmin: false,
-          userId: acc.id
-        });
-        broadcastRoomList();
-      }
-      targetSocket.emit('force-rename', {
-        name: newName,
-        by: socket.userName || ADMIN_DISPLAY_NAME,
-        message: 'Seu nome de perfil foi alterado pela administração.'
-      });
-    }
-
-    callback({ success: true, accounts: listAccountsSnapshot(search) });
-    console.log(`[Admin] ${socket.userName} renomeou ${oldName} → ${newName} (acc ${acc.id})`);
-  });
-
-  // Admin apaga conta (online ou offline): remove do registro, desconecta se online
-  socket.on('admin-delete-account', (data, callback) => {
-    if (typeof callback !== 'function') callback = () => {};
-    elevateAdminFromPayload(socket, data || {});
-    if (!requireAdmin(socket)) {
-      return callback({ success: false, message: 'Sem permissão de administrador.' });
-    }
-    const accountId = sanitizeStr((data || {}).accountId, 40);
-    const targetSocketId = sanitizeStr((data || {}).targetId, 40);
-    const search = sanitizeStr((data || {}).search || '', 40);
-
-    let acc = accountId ? accountRegistry.get(accountId) : null;
-    if (!acc && targetSocketId) acc = findAccountBySocket(targetSocketId);
-    if (!acc) return callback({ success: false, message: 'Conta não encontrada.' });
-
-    if (acc.isAdmin || acc.id === ADMIN_USER_ID) {
-      return callback({ success: false, message: 'Não é possível apagar a conta admin.' });
-    }
-
-    const myAcc = findAccountBySocket(socket.id);
-    if (myAcc && myAcc.id === acc.id) {
-      return callback({ success: false, message: 'Você não pode apagar a própria conta por aqui.' });
-    }
-
-    const targetName = acc.name;
-    const onlineSid = activeNames.get(acc.nameKey) || null;
-    const targetSocket = onlineSid ? io.sockets.sockets.get(onlineSid) : null;
-
-    if (targetSocket) {
-      if (targetSocket.roomId) {
-        const room = rooms.get(targetSocket.roomId);
-        if (room) {
-          room.participants.delete(onlineSid);
-          targetSocket.leave(targetSocket.roomId);
-          io.to(targetSocket.roomId).emit('user-left', {
-            id: onlineSid,
-            name: targetName,
-            kicked: true
-          });
-          if (room.participants.size === 0) room.emptyAt = Date.now();
-          targetSocket.roomId = null;
-        }
-      }
-      targetSocket.emit('account-deleted', {
-        message: 'Sua conta foi removida pela administração. Você precisará criar um novo perfil.',
-        by: socket.userName || ADMIN_DISPLAY_NAME
-      });
-      releaseActiveName(onlineSid);
-      setTimeout(() => {
-        try { targetSocket.disconnect(true); } catch (_) {}
-      }, 300);
-    } else {
-      // Offline: só limpa índice de nome se houver
-      if (activeNames.get(acc.nameKey)) activeNames.delete(acc.nameKey);
-    }
-
-    accountRegistry.delete(acc.id);
-    scheduleSaveAccounts();
-    broadcastRoomList();
-    callback({ success: true, accounts: listAccountsSnapshot(search) });
-    console.log(`[Admin] ${socket.userName} apagou conta de ${targetName} (acc ${acc.id})`);
-  });
-
-  // Admin zera TODAS as contas (exceto a conta admin atual) e limpa o disco
-  socket.on('admin-reset-accounts', (data, callback) => {
-    if (typeof data === 'function') { callback = data; data = {}; }
-    if (typeof callback !== 'function') callback = () => {};
-    elevateAdminFromPayload(socket, data || {});
-    if (!requireAdmin(socket)) {
-      return callback({ success: false, message: 'Sem permissão de administrador.' });
-    }
-
-    const toKick = [];
-    for (const [sid, sock] of io.sockets.sockets) {
-      if (!sock || sid === socket.id) continue;
-      if (sock.isAdmin || isAdminName(sock.userName)) continue;
-      toKick.push(sid);
-    }
-    for (const sid of toKick) {
-      const sock = io.sockets.sockets.get(sid);
-      if (!sock) continue;
-      const nm = sock.userName || '';
-      if (sock.roomId) {
-        const room = rooms.get(sock.roomId);
-        if (room) {
-          room.participants.delete(sid);
-          try { sock.leave(sock.roomId); } catch (_) {}
-          io.to(sock.roomId).emit('user-left', { id: sid, name: nm, kicked: true });
-          if (room.participants.size === 0) room.emptyAt = Date.now();
-          sock.roomId = null;
-        }
-      }
-      try {
-        sock.emit('account-deleted', {
-          message: 'Todas as contas foram resetadas pela administração. Crie um novo perfil.',
-          by: socket.userName || ADMIN_DISPLAY_NAME
-        });
-      } catch (_) {}
-      releaseActiveName(sid);
-      setTimeout(() => {
-        try { sock.disconnect(true); } catch (_) {}
-      }, 200);
-    }
-
-    // Limpa registry inteiro e recria só o admin atual
-    accountRegistry.clear();
-    for (const [k] of activeNames) {
-      if (k !== ADMIN_DISPLAY_NAME) activeNames.delete(k);
-    }
-    accountSeq = 100;
-    const adminAcc = {
-      id: ADMIN_USER_ID,
-      name: socket.userName || ADMIN_DISPLAY_NAME,
-      nameKey: ADMIN_DISPLAY_NAME,
-      photoUrl: sanitizePhotoUrl((data || {}).photoUrl || socket.photoUrl || ''),
-      isAdmin: true,
-      createdAt: Date.now(),
-      lastSeen: Date.now()
-    };
-    accountRegistry.set(ADMIN_USER_ID, adminAcc);
-    socketToAccount.clear();
-    socketToAccount.set(socket.id, ADMIN_USER_ID);
-    activeNames.set(ADMIN_DISPLAY_NAME, socket.id);
-    scheduleSaveAccounts();
-
-    // Opcional: limpa avisos antigos no reset geral
-    if ((data || {}).clearAnnouncements !== false) {
-      siteAnnouncements.clear();
-      scheduleSaveAnnouncements();
-      io.emit('site-announcement-cleared', { id: null });
-    }
-
-    broadcastRoomList();
-    callback({ success: true, accounts: listAccountsSnapshot('') });
-    console.log(`[Admin] ${socket.userName} resetou TODAS as contas. Registry limpo.`);
   });
 
   // ---------- Transmissão ----------
@@ -1419,28 +517,6 @@ io.on('connection', (socket) => {
     io.to(socket.roomId).emit('chat-message', msg);
   });
 
-  // ---------- Foto de perfil: repassa para a sala (GIF/imagem para todos) ----------
-  socket.on('photo-share', (data) => {
-    const room = rooms.get(socket.roomId);
-    if (!room || !room.participants.has(socket.id)) return;
-    const photoUrl = sanitizePhotoUrl((data || {}).photoUrl || '');
-    if (!photoUrl) return;
-    const p = room.participants.get(socket.id);
-    if (p) p.photoUrl = photoUrl;
-    socket.photoUrl = photoUrl;
-    const acc = findAccountBySocket(socket.id);
-    if (acc) {
-      acc.photoUrl = photoUrl;
-      acc.lastSeen = Date.now();
-      scheduleSaveAccounts();
-    }
-    // Envia para os outros na sala (não ecoa de volta)
-    socket.to(socket.roomId).emit('photo-share', {
-      id: socket.id,
-      photoUrl
-    });
-  });
-
   // ---------- Sinalização WebRTC ----------
   socket.on('request-peer', (data) => {
     const targetId = sanitizeStr((data || {}).targetId, 30);
@@ -1474,7 +550,6 @@ io.on('connection', (socket) => {
 
   socket.on('disconnect', () => {
     handleLeave(socket);
-    releaseActiveName(socket.id);
     socketEventCounts.delete(`${socket.id}:create-room`);
     socketEventCounts.delete(`${socket.id}:join-room`);
     console.log(`[-] ${socket.id}`);

@@ -109,20 +109,9 @@
       <button type="button" class="arena-nav-item" id="btn-privacy">
         <span class="ani">🛡</span> Privacidade
       </button>
-      <button type="button" class="arena-nav-item" id="btn-download-app" title="Baixar app Android">
-        <span class="ani">📱</span> Baixar app
+      <button type="button" class="arena-nav-item" id="btn-download-app">
+        <span class="ani">📱</span> Baixar App
       </button>
-      <div class="arena-nav-discord" id="discord-rpc-row">
-        <div class="arena-nav-discord-label">
-          <span class="ani" aria-hidden="true">🎮</span>
-          <span>Mostrar atividade no Discord</span>
-        </div>
-        <label class="mc-switch" title="Ativar ou desativar Rich Presence no Discord">
-          <input type="checkbox" id="toggle-discord-rpc" role="switch" aria-checked="false" aria-label="Mostrar atividade no Discord">
-          <span class="mc-switch-slider"></span>
-        </label>
-      </div>
-      <p id="discord-rpc-status" class="arena-nav-discord-status hidden" aria-live="polite"></p>
     </nav>
 
     <div class="arena-side-bottom">
@@ -610,66 +599,30 @@
   </div>
 </div>
 
-<!-- Modal: Discord Rich Presence (opcional) -->
-<div id="modal-discord-rpc" class="modal-overlay hidden" role="dialog" aria-modal="true" aria-labelledby="discord-rpc-modal-title">
-  <div class="modal-box" style="max-width:440px">
+
+
+<!-- ===================== MODAL BAIXAR APP CELULAR ===================== -->
+<div id="modal-download-app" class="modal-overlay hidden" role="dialog" aria-modal="true" aria-labelledby="download-app-title">
+  <div class="modal-box" style="max-width:420px">
     <div class="modal-header">
-      <h2 class="modal-title" id="discord-rpc-modal-title">🎮 Atividade no Discord</h2>
-      <button type="button" class="modal-close" id="btn-discord-rpc-close" aria-label="Fechar">✕</button>
+      <h2 class="modal-title" id="download-app-title">📱 App para celular</h2>
+      <button type="button" id="btn-download-app-close" class="btn-icon-sm" aria-label="Fechar">✕</button>
     </div>
-    <div class="modal-body discord-rpc-modal-body">
-      <p class="modal-desc">
-        Ao autorizar, o MaxCord poderá <strong>apenas atualizar a atividade do seu perfil no Discord</strong>
-        (ex.: “Transmitindo no MaxCord” ou o nome da sala em que você está).
-      </p>
-      <ul class="discord-rpc-points">
-        <li>O MaxCord <strong>não coleta</strong> mensagens, amigos, servidores nem dados pessoais da sua conta Discord.</li>
-        <li>Usamos somente o escopo mínimo necessário para mostrar a atividade (autorização OAuth2).</li>
-        <li>Você pode <strong>desligar a qualquer momento</strong> pela mesma chave de alternância no menu.</li>
-        <li>Nenhuma informação da sua conta Discord é armazenada no MaxCord além do necessário para manter a conexão autorizada.</li>
-      </ul>
-      <p class="input-hint" style="margin-top:12px">
-        A autorização abre a página oficial do Discord. Você controla o que aceita lá.
-      </p>
-    </div>
-    <div class="privacy-modal-actions" style="gap:10px">
-      <button type="button" id="btn-discord-rpc-cancel" class="btn-secondary w-full">Cancelar</button>
-      <button type="button" id="btn-discord-rpc-accept" class="btn-primary w-full">Autorizar no Discord</button>
-    </div>
-  </div>
-</div>
-
-
-
-<!-- Modal: Baixar app Android -->
-<div id="modal-download-app" class="modal-overlay hidden" role="dialog" aria-modal="true" aria-labelledby="download-app-modal-title">
-  <div class="modal-box" style="max-width:440px">
-    <div class="modal-header">
-      <h2 class="modal-title" id="download-app-modal-title">📱 App MaxCord para celular</h2>
-      <button type="button" class="modal-close" id="btn-download-app-close" aria-label="Fechar">✕</button>
-    </div>
-    <div class="modal-body">
-      <p class="modal-desc">
-        No <strong>navegador do celular</strong> não é possível transmitir a tela (limitação do sistema).
-        Com o <strong>app Android</strong> você consegue <strong>compartilhar a tela do celular</strong>
-        nas salas do MaxCord — recurso que o site no browser não oferece no mobile.
-      </p>
-      <ul class="download-app-points">
-        <li>Transmita a tela do Android para quem estiver na sala</li>
-        <li>Mesmas salas e link do site MaxCord</li>
-        <li>Arquivo APK oficial do projeto</li>
-      </ul>
-      <p class="input-hint" style="margin-top:12px">
-        No Android pode ser necessário permitir “instalar apps de fontes desconhecidas” para este APK.
-      </p>
-    </div>
-    <div class="privacy-modal-actions" style="gap:10px; flex-direction:column;">
-      <a id="btn-download-apk" class="btn-primary w-full" href="/max-cord.apk" download="max-cord.apk"
-         style="text-align:center; text-decoration:none; display:inline-flex; align-items:center; justify-content:center; gap:8px;">
-        ⬇ Baixar APK
+    <p class="modal-desc" style="margin-bottom:14px">
+      No <strong>navegador / site</strong> não é possível transmitir a tela pelo celular.
+      Com o <strong>aplicativo MaxCord</strong>, quem usa celular pode transmitir a tela normalmente
+      (recurso disponível só no app).
+    </p>
+    <div class="btn-row" style="flex-direction:column;gap:10px">
+      <a id="btn-apk-download" class="btn-primary w-full" href="/max-cord.apk" download="max-cord.apk"
+         style="text-align:center;text-decoration:none;display:flex;align-items:center;justify-content:center;gap:8px">
+        ⬇ Baixar MaxCord (APK)
       </a>
       <button type="button" id="btn-download-app-cancel" class="btn-secondary w-full">Fechar</button>
     </div>
+    <p class="input-hint" style="margin-top:12px;text-align:center">
+      Android · arquivo .apk · instale permitindo fontes desconhecidas se o sistema pedir.
+    </p>
   </div>
 </div>
 
@@ -692,6 +645,24 @@
       navigator.serviceWorker.register('/sw.js').catch(() => {});
     });
   }
+</script>
+
+<script>
+(function () {
+  var modal = document.getElementById('modal-download-app');
+  var openBtn = document.getElementById('btn-download-app');
+  var closeBtn = document.getElementById('btn-download-app-close');
+  var cancelBtn = document.getElementById('btn-download-app-cancel');
+  if (!modal || !openBtn) return;
+  function openModal() { modal.classList.remove('hidden'); }
+  function closeModal() { modal.classList.add('hidden'); }
+  openBtn.addEventListener('click', openModal);
+  if (closeBtn) closeBtn.addEventListener('click', closeModal);
+  if (cancelBtn) cancelBtn.addEventListener('click', closeModal);
+  modal.addEventListener('click', function (e) {
+    if (e.target === modal) closeModal();
+  });
+})();
 </script>
 </body>
 </html>
